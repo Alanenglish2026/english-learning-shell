@@ -1,0 +1,30 @@
+DAY1 iPhone device fix v1.0.2
+
+真实问题：
+1. 删除/重新添加PWA后，首次离线打开时Service Worker尚未取得页面控制，首页因此提示“离线准备尚未完成”。
+2. iPhone PWA在S02麦克风检查中，按住录音 + 系统权限/Pointer生命周期容易失败，页面落入“点一下开始”恢复态但不能完成录音链。
+
+本补丁：
+- shell.js：首次联网自动完成Service Worker控制；必要时仅自动刷新一次；状态明确显示“正在准备离线使用/已准备好”。
+- sw.js：skipWaiting + clients.claim，强制新壳尽快接管；清理旧shell cache，不删除Course Audio缓存。
+- app.js：iPhone/iPad录音默认使用同一主按钮“点一下开始 → 点一下结束”；不再因系统权限UI/页面visibility误判而拒绝麦克风；MediaRecorder增加MIME/默认构造回退；空录音安全重试；权限错误给出明确提示。
+- version.json：shell_version 1.0.2。
+
+不修改：
+- U01课程包
+- Day1教学顺序
+- IndexedDB课程安装数据
+- 学习进度
+- Course Audio
+
+上传到GitHub仓库根目录覆盖：
+app.js
+shell.js
+sw.js
+version.json
+
+真机验收：
+A. 联网打开一次首页，等待显示“已准备好”。
+B. 进入S02，第一次如弹麦克风权限选择“允许”。
+C. 点一下开始 → 说“准备好了” → 点一下结束 → 应回听并自动进入下一屏。
+D. 完全关闭Wi‑Fi和蜂窝网络，强制关闭PWA，再从主屏幕打开；应能进入已安装U01。
