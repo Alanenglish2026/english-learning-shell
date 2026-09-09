@@ -9,7 +9,20 @@ export class LocalRuntime {
  async execute(path,d){
   let s=(await this.db.get('critical','session'))?.value||{runtime_version:2,session_id:uid(),unit_id:'U01',screen:0,session_created_at:now(),pilot_started_at:null,learner_private_state:{},trials:[],attempts:[],support:'independent',repairs:[],ended:false,meaning_cue_visible:false,review_queue:[]};reconcile(s);const revision=s.revision||0;let answer,ops=[];
   const event=(kind,extra={})=>ops.push({store:'events',value:{id:uid(),session_id:s.session_id,trial_id:null,timestamp:now(),node_id:null,modality:null,target:null,support_level:'none',first_attempt:null,replay_count:0,learner_action:null,learner_audio:null,listener_action:null,correct:null,latency:null,independent_support:'not_applicable',device_issue:null,notes:'',evidence_type:kind,...extra}});
-  if(path==='state'&&d){if('ended'in d||d.screen===15)throw Error('交流结算后才能完成。');for(const k of ['screen','trial','trials','meaning_cue_visible','last_play','played','recording_active','trial_feedback','trial_repair'])if(k in d)s[k]=d[k];}
+  if(path==='recover'){
+   const lost=[];const wasRecording=s.recording_active;s.recording_active=false;
+   for(const a of s.attempts){if(a.result||a.audio_deleted)continue;const m=await this.db.get('media',a.attempt_id);if(!m?.blob?.size)lost.push(a);}
+   if(lost.length){s.interrupted_attempts=[...(s.interrupted_attempts||[]),...lost.map(a=>({...a,ticket:undefined,recovery_reason:'temporary_audio_missing'}))];s.attempts=s.attempts.filter(a=>!lost.includes(a));}
+   const pending=s.attempts.filter(a=>a.mode==='S'&&!a.result);
+   if(!s.ended){
+    if(lost.some(a=>a.mode==='S'))s.screen=11;
+    else if(pending.length)s.screen=12;
+    else if(s.screen===12)s.screen=s.attempts.some(a=>a.mode==='S'&&a.result)?13:11;
+    if(s.screen===2&&s.attempts.some(a=>a.mode==='DEVICE'&&a.audio_deleted))s.screen=3;
+   }
+   if(lost.length||wasRecording)event('safe_recovery_used',{attempt_ids:lost.map(a=>a.attempt_id),recording_interrupted:!!wasRecording,screen:s.screen});
+  }
+  else if(path==='state'&&d){if('ended'in d||d.screen===15)throw Error('交流结算后才能完成。');for(const k of ['screen','trial','trials','meaning_cue_visible','last_play','played','recording_active','trial_feedback','trial_repair'])if(k in d)s[k]=d[k];}
   else if(path==='start'){if(s.pilot_started_at===null){s.pilot_started_at=now();event('PILOT_START');}if(s.screen===0)s.screen=1;}
   else if(path==='event'){if(['PILOT_START','PILOT_END','FINAL_EVIDENCE_SETTLED'].includes(d.evidence_type))throw Error('完成由系统结算。');const {evidence_type,...extra}=d;event(evidence_type,extra);}
   else if(path==='choice'){if(s.learner_private_state.locked||!['water','tea'].includes(d.choice))throw Error('选择已经锁定。');s.learner_private_state={secret_choice:d.choice,locked:true,timestamp:now()};s.meaning_cue_visible=true;event('CHOICE_LOCKED',{target:d.choice,meaning_cue_visible:true});}

@@ -1,3 +1,5 @@
+import {MediaPlayer} from './media.js';
+import {Recorder} from './recorder.js';
 import {newTrial,completeTrial} from './core.js';
 import {bindHold} from './hold.js';
 import {AUTO_STEPS} from './ux_policy.js';
@@ -8,7 +10,8 @@ const token='';
 history.replaceState(null,'',location.pathname);
 let s,manifest,rec,stream,chunks=[],recordStarted,pendingBlob,playing=false,poll,timer,epoch=0,uiBusy=false,recordBusy=false;
 let audio=new Audio();let actions,secondary,body,pendingTransition;
-const IOS_TOUCH=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&(navigator.maxTouchPoints||0)>1);
+const player=new MediaPlayer(diagnostic),capture=new Recorder(diagnostic);
+let restoring=false,retryVoiceURL=null;const standalone=()=>navigator.standalone===true||globalThis.matchMedia?.('(display-mode: standalone)').matches===true;
 function diagnostic(type,extra={}){log(type,{...extra,diagnostic:true,observed_at:Date.now()}).catch(()=>{});}
 function cancelTransition(){clearTimeout(timer);pendingTransition=null;}
 function drainTransition(fallback=false){const job=pendingTransition;if(!job||job.running||document.hidden||job.at!==epoch)return;if(fallback&&Date.now()<job.due)return;job.running=true;pendingTransition=null;clearTimeout(timer);if(fallback)diagnostic('fallback_used',{reason:'transition_watchdog'});diagnostic('transition_requested',{transition_id:job.id});Promise.resolve().then(job.fn).then(()=>diagnostic('transition_completed',{transition_id:job.id})).catch(async e=>{await fail(e);action('再试一次',job.fn,'recovery')});}
@@ -16,10 +19,10 @@ setInterval(()=>drainTransition(true),300);
 async function api(path,data){const r=await fetch('./api/'+path,{method:data?'POST':'GET',headers:{Authorization:'Bearer '+token,...(data?{'Content-Type':'application/json'}:{})},body:data?JSON.stringify(data):undefined});const v=await r.json();if(!r.ok)throw Error(v.error||'暂时没有连接好');return v;}
 async function log(type,extra={}){return api('event',{evidence_type:type,node_id:'S'+String(s.screen).padStart(2,'0'),...extra});}
 async function persist(patch={}){s=await api('state',patch);return s;}
-async function fail(e){const name=String(e?.name||''),msg=String(e?.message||e||'');if(name==='NotAllowedError'||name==='SecurityError'||/permission|denied|notallowed/i.test(msg))notice.textContent='请允许“英语学习”使用麦克风，然后点一下开始。';else if(/microphone_unavailable|NotFoundError/i.test(name+' '+msg))notice.textContent='没有找到可用麦克风，请检查系统麦克风权限。';else notice.textContent='这一步还没完成，可以再试一次。';try{await log('DEVICE_ISSUE',{device_issue:msg,error_name:name})}catch{} }
+async function fail(e){notice.textContent='这一步还没完成，可以再试一次。';try{await log('DEVICE_ISSUE',{device_issue:String(e.message||e)})}catch{} }
 function safe(task){return async()=>{if(uiBusy||recordBusy)return;uiBusy=true;notice.textContent='';try{await task()}catch(e){await fail(e)}finally{uiBusy=false}};}
 function text(tag,value,parent=body){const x=document.createElement(tag);x.textContent=value;parent.append(x);return x;}
-function layout(title){clearInterval(poll);cancelTransition();epoch++;el.replaceChildren();body=document.createElement('section');body.className='scene';el.append(body);text('h1',title);actions=document.createElement('div');actions.className='actions';secondary=document.createElement('div');secondary.className='secondary-slot';el.append(actions,secondary);}
+function layout(title){clearInterval(poll);cancelTransition();if(retryVoiceURL){URL.revokeObjectURL(retryVoiceURL);retryVoiceURL=null;}epoch++;diagnostic('screen_enter',{screen:s?.screen});el.replaceChildren();body=document.createElement('section');body.className='scene';el.append(body);text('h1',title);actions=document.createElement('div');actions.className='actions';secondary=document.createElement('div');secondary.className='secondary-slot';el.append(actions,secondary);}
 function action(label,fn,kind='learning'){actions.replaceChildren();const b=document.createElement('button');b.className='primary';b.textContent=label;b.onclick=safe(async()=>{await log('CLICK',{click_type:kind,action:label});await fn()});actions.append(b);return b;}
 function second(label,fn){secondary.replaceChildren();const b=document.createElement('button');b.className='quiet';b.textContent=label;b.onclick=safe(async()=>{if(playing)return;cancelTransition();await log('CLICK',{click_type:'learning',action:label});await fn()});secondary.append(b);return b;}
 function picture(w,cls=''){const im=document.createElement('img');im.src='./course/assets/'+(w==='water'?'p01.png':'p02.png');im.alt='饮品图片';im.className='picture '+cls;im.onerror=()=>fail(Error('image_failed'));body.append(im);return im;}
@@ -28,45 +31,40 @@ function later(fn,ms=1400){cancelTransition();pendingTransition={fn,at:epoch,due
 async function go(n,autoId){if(playing)return;clearInterval(poll);clearTimeout(timer);if(autoId){if(!AUTO_STEPS.includes(autoId))throw Error('invalid auto step');await log('AUTO_ADVANCE',{step:autoId});}await persist({screen:n,played:false});await render();}
 async function playRaw(id,manual=false){
  if(playing)throw Error('audio_busy');playing=true;
- // A separate element prevents queued pause events from a previous source/priming play.
- audio.onpause=audio.onended=audio.onerror=null;audio.pause();audio=new Audio();const media=audio;
- media.src=id==='TEST'?'./course/assets/TEST.wav':'./course/'+manifest.find(x=>x.audio_id===id).file_name;
- try{await new Promise((resolve,reject)=>{
-  let accepted=false,endedEvent=false,done=false;const startedAt=Date.now();
-  const atEnd=()=>media.ended===true||(Number.isFinite(media.duration)&&media.duration>0&&media.currentTime>=media.duration);
-  const cleanup=()=>{clearInterval(watch);media.onpause=media.onended=media.onerror=media.ontimeupdate=null;};
-  const finish=(error,fallback)=>{if(done)return;done=true;cleanup();if(error){reject(error);return;}if(fallback)diagnostic('fallback_used',{audio_id:id,reason:fallback});diagnostic('audio_ended',{audio_id:id,completion_signal:endedEvent?'ended':'media_position'});resolve();};
-  const check=()=>{if(accepted&&(endedEvent||atEnd())){finish(null,endedEvent?null:'media_end_without_ended');return true;}return false;};
-  const watch=setInterval(()=>{if(!check()&&Date.now()-startedAt>20000)finish(Error('audio_timeout'));},250);
-  media.onended=()=>{endedEvent=true;check();};
-  media.ontimeupdate=check;
-  media.onpause=()=>{if(check())return;if(accepted&&media.paused&&!atEnd())finish(Error('audio_interrupted'));};
-  media.onerror=()=>finish(Error('audio_failed'));
-  // Call play synchronously in the real click, before any async logging/storage work.
-  try{Promise.resolve(media.play()).then(()=>{accepted=true;if(manual)diagnostic('manual_audio_started',{audio_id:id});check();},e=>finish(e));}catch(e){finish(e);}
- });await log('AUDIO_PLAY',{audio_id:id,audio_quality:manifest.find(x=>x.audio_id===id)?.status||'device',duration:media.duration});await persist({last_play:{audio_id:id,at:Date.now()},played:true});}
- finally{playing=false;media.pause();}
+ try{const src=id==='TEST'?'./course/assets/TEST.wav':'./course/'+manifest.find(x=>x.audio_id===id).file_name;
+ const result=await player.play(src,{id,manual});await log('AUDIO_PLAY',{audio_id:id,audio_quality:manifest.find(x=>x.audio_id===id)?.status||'device',duration:Number.isFinite(result.duration)?result.duration:null});await persist({last_play:{audio_id:id,at:Date.now()},played:true});}finally{playing=false;}
 }
 async function playThen(id,next,manual=false){const at=epoch;try{await playRaw(id,manual);if(at===epoch){diagnostic('transition_requested',{audio_id:id,transition_id:'audio:'+at});await next();diagnostic('transition_completed',{audio_id:id,transition_id:'audio:'+at});}}catch(e){if(at!==epoch)return;await log(e.name==='NotAllowedError'?'AUTOPLAY_BLOCKED':'DEVICE_ISSUE',{device_issue:e.name==='NotAllowedError'?null:e.message,audio_id:id});const b=action('听',()=>{});b.onclick=safe(()=>{const task=playThen(id,next,true);diagnostic('CLICK',{click_type:'learning',action:'听'});return task;});}}
-async function ownPlayback(a,next){try{const r=await fetch('./api/recording/'+a.attempt_id,{headers:{Authorization:'Bearer '+token}});if(!r.ok)throw Error('recording_read_failed');const url=URL.createObjectURL(await r.blob());playing=true;audio.src=url;try{await new Promise((resolve,reject)=>{audio.onpause=()=>reject(Error('audio_interrupted'));audio.onended=resolve;audio.onerror=()=>reject(Error('recording_play_failed'));audio.play().catch(reject)});await log('SELF_PLAYBACK',{attempt_id:a.attempt_id});}finally{playing=false;URL.revokeObjectURL(url)}if(next)await next();}catch(e){playing=false;action('听听自己',()=>ownPlayback(a,next));await log('DEVICE_ISSUE',{device_issue:e.message});}}
-async function startRec(mode){if(playing)throw Error('audio_still_playing');recordBusy=true;if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw Error('microphone_unavailable');
- let localStream;
- try{localStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true},video:false});stream=localStream;const tracks=stream.getAudioTracks();if(!stream.active||!tracks.length||tracks.every(t=>t.readyState!=='live'))throw Error('microphone_track_unavailable');
-  let recorder=null,lastErr=null;const types=['audio/mp4','audio/webm;codecs=opus','audio/webm','audio/ogg'];for(const mime of types){try{if(MediaRecorder.isTypeSupported?.(mime)){recorder=new MediaRecorder(stream,{mimeType:mime});break;}}catch(e){lastErr=e;}}
-  if(!recorder){try{recorder=new MediaRecorder(stream);}catch(e){lastErr=e;}}
-  if(!recorder)throw lastErr||Error('recorder_unavailable');rec=recorder;chunks=[];let broken=false;
-  rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
-  rec.onerror=()=>{broken=true;recordBusy=false;stream?.getTracks().forEach(t=>t.stop());persist({recording_active:false}).then(()=>{fail(Error('recorder_failed'));recordControl(mode,IOS_TOUCH?'点一下开始':'按住说话')}).catch(fail)};
-  await persist({recording_active:true});recordStarted=Date.now();rec.start(250);diagnostic('microphone_recording_started',{mode,mime:rec.mimeType||'default'});
-  for(const track of stream.getTracks())track.onended=()=>{if(rec?.state==='recording'){rec.stop();log('DEVICE_ISSUE',{device_issue:'microphone_track_ended'}).catch(()=>{});}};
-  rec.onstop=()=>{if(broken)return;stream?.getTracks().forEach(t=>t.stop());const duration=(Date.now()-recordStarted)/1000;const type=rec.mimeType||chunks[0]?.type||'audio/mp4';pendingBlob={client_record_id:crypto.randomUUID(),blob:new Blob(chunks,{type}),mode,duration};if(pendingBlob.duration<.25||pendingBlob.blob.size===0){pendingBlob=null;recordBusy=false;persist({recording_active:false}).then(()=>{notice.textContent='没有录到声音，请再试一次。';recordControl(mode,IOS_TOUCH?'点一下开始':'按住说话')}).catch(fail);return;}storePending().catch(fail)};
- }catch(e){localStream?.getTracks().forEach(t=>t.stop());stream=null;rec=null;recordBusy=false;try{await persist({recording_active:false})}catch{}throw e;}}
-
-function recordControl(mode,label){const tap=IOS_TOUCH||label==='点一下开始';const shown=IOS_TOUCH&&label.startsWith('按住')?(mode==='DEVICE'?'点一下开始':mode==='ECHO'?'点一下开始跟着说':'点一下开始说'):label;const b=action(shown,()=>{});b.onclick=null;bindHold(b,{start:async()=>{try{await startRec(mode)}catch(e){recordBusy=false;throw e}},stop:async()=>{if(rec?.state==='recording')rec.stop()},onError:async e=>{await fail(e);recordControl(mode,IOS_TOUCH?'点一下开始':label);},mode:tap?'tap':'hold',onAction:()=>log('CLICK',{click_type:'learning',action:(tap?'tap_':'hold_')+mode}).catch(()=>{})});}
+async function ownPlayback(a,next,manual=false,preparedURL=null){
+ let url=preparedURL,keepURL=false;if(preparedURL)retryVoiceURL=null;const at=epoch;let completed=false;
+ const advance=async()=>{if(completed||at!==epoch)return;completed=true;diagnostic('transition_requested',{attempt_id:a.attempt_id});if(next)await next();diagnostic('transition_completed',{attempt_id:a.attempt_id});};
+ const retry=()=>{keepURL=!!url;retryVoiceURL=url;const b=action('再试一次',()=>{});b.onclick=safe(()=>ownPlayback(a,next,true,url));};
+ try{if(!url){const r=await fetch('./api/recording/'+a.attempt_id);if(!r.ok)throw Error('recording_missing');const blob=await r.blob();if(blob.size<256)throw Error('recording_missing');url=URL.createObjectURL(blob);}
+ playing=true;diagnostic('recording_playback_started',{attempt_id:a.attempt_id});await player.play(url,{id:'own_voice',manual});playing=false;
+ diagnostic('recording_playback_ended',{attempt_id:a.attempt_id});await log('SELF_PLAYBACK',{attempt_id:a.attempt_id});
+ if(next){action('继续',advance,'recovery');later(advance,650);}
+ }catch(e){playing=false;await log('DEVICE_ISSUE',{device_issue:e.message});if(at===epoch){notice.textContent=e.message==='recording_missing'?'这次声音没有保存完整，请重新说一次。':'没能完整播放，请再试一次。';if(e.message==='recording_missing')action('再试一次',recoverAndRender,'recovery');else retry();}}
+ finally{playing=false;player.release();if(url&&!keepURL)URL.revokeObjectURL(url);}
+}
+function micFailure(e,mode){
+ recordBusy=false;diagnostic(e.name==='NotAllowedError'?'mic_denied':'mic_error',{reason:e.message,name:e.name});
+ const messages={media_devices_unavailable:'这里暂时不能使用麦克风，请用Safari打开。',recorder_unsupported:'这里暂时不能录音，请用Safari打开。',no_audio_track:'没有取得麦克风，请关闭其他录音应用后再试。',permission_unavailable:'还没有收到麦克风许可，请留意权限提示，再试一次。',empty_recording:'没有录到完整声音，请重新说一次。',recording_interrupted:'刚才的录音中断了，请重新说一次。'};
+ notice.textContent=e.name==='NotAllowedError'?'麦克风被拒绝。请在Safari此网站的设置中允许麦克风，再重试。':messages[e.message]||'麦克风暂时没准备好，请关闭其他录音应用后再试。';
+ recordControl(mode,'点一下开始');if(standalone())second('用Safari完成本次声音测试',safariFallback);
+}
+async function safariFallback(){capture.cancel();layout('用Safari继续');text('p','点下方网址，用Safari打开。若仍在此应用，请复制网址到Safari。');const a=text('a','打开Safari');a.href=new URL('./',location.href).href;a.target='_blank';a.rel='noopener';text('p',a.href);text('p','若Safari中没有课件，请导入原课件ZIP。两处进度可能分开，可先保存进度，再在Safari首页恢复。');action('保存进度',exportResults,'recovery');second('返回学习',recoverAndRender);}
+function recordControl(mode,label){
+ const at=epoch,b=action('点一下开始',()=>{});b.classList.add('hold');b.onclick=null;
+ const start=async()=>{if(playing||recordBusy)return;recordBusy=true;
+  try{await capture.start();if(at!==epoch)return;await persist({recording_active:true});}catch(e){if(at===epoch){capture.cancel();recordBusy=false;}throw e;}};
+ const stop=async()=>{try{const p=await capture.stop();pendingBlob={...p,mode,client_record_id:crypto.randomUUID()};await storePending();}catch(e){recordBusy=false;await persist({recording_active:false});throw e;}};
+ capture.onUnexpected=e=>{recordBusy=false;persist({recording_active:false}).then(()=>micFailure(e,mode)).catch(fail);};
+ bindHold(b,{start,stop,onError:e=>{if(at===epoch)micFailure(e,mode);},mode:'tap',onAction:()=>diagnostic('CLICK',{click_type:'learning',action:'tap_'+mode})});
+}
 async function storePending(){try{const p=pendingBlob;if(!p)return;
  if(!p.saved&&LOCAL)p.saved=await saveRecording({client_record_id:p.client_record_id,blob:p.blob,mime:p.blob.type,mode:p.mode,duration:p.duration});
  if(!p.saved){const b64=await new Promise((resolve,reject)=>{const f=new FileReader();f.onload=()=>resolve(f.result.split(',')[1]);f.onerror=reject;f.readAsDataURL(p.blob)});p.saved=await api('record',{client_record_id:p.client_record_id,audio:b64,mime:p.blob.type,mode:p.mode,duration:p.duration});}
- s=await api('state');recordBusy=false;await afterRecord(p.saved);pendingBlob=null;chunks=[];rec=null;stream=null;
+ s=await api('state');recordBusy=false;pendingBlob=null;chunks=[];rec=null;stream=null;await afterRecord(p.saved);
  }catch(e){recordBusy=false;notice.textContent='暂时没存好，请不要关闭页面。';action('再试一次',storePending,'recovery');await log('DEVICE_ISSUE',{device_issue:e.message}).catch(()=>{});}}
 async function afterRecord(a){
  if(a.mode==='S'){await log('AUTO_ADVANCE',{step:'speaking_saved_submitted'});return send(a);}
@@ -81,12 +79,12 @@ async function nextTrial(){const count=new Set(s.trials.map(t=>t.trial_id)).size
 async function listenRepair(){const t=s.trial;const count=(s.trial_repair||0)+1;await persist({trial_feedback:false,trial_repair:count});if(count===1){layout('再听一次');return listen();}t.help_used=true;s=await api('repair',{repair_type:'L_meaning_sound',scope:'L',support_level:'answer_audio_image',before_attempt:t.trial_id,after_attempt:t.trial_id,answer_help:false});await persist({trial:t});layout('看一眼，听一次');picture(t.target);text('p',t.target==='water'?'这是水。':'这是茶。');await playThen(t.target==='water'?'A01':'A02',async()=>{later(async()=>{layout('听');await listen()},1200)});}
 async function helpSpeaking(){s=await api('repair',{repair_type:'S_retrieval',answer_help:true,scope:'S',support_level:'answer_audio',after_attempt:null});layout('听一次，再试着说');picture(s.learner_private_state.secret_choice);await playThen(s.learner_private_state.secret_choice==='water'?'A01':'A02',()=>go(11));}
 async function send(a){await api('submit',{attempt_id:a.attempt_id});await persist({screen:12});await renderWait(a);}
-async function renderWait(a){layout('对方正在听');text('p',LOCAL?'请协助者只听这次声音，然后带回回应。':'稍等一下。');if(LOCAL)action('请协助者回应',()=>{location.href='./pilot.html'},'navigation');second('听听自己',()=>ownPlayback(a));let checking=true;poll=setInterval(async()=>{if(checking||playing)return;checking=true;try{await check(a)}catch(e){notice.textContent='还在等待，进度已保存。';}finally{checking=false}},1800);try{await check(a)}finally{checking=false;}}
-async function check(a){const r=await api('result/'+a.attempt_id);if(r.result){clearInterval(poll);await log('AUTO_ADVANCE',{step:'listener_result'});s=await api('state');await persist({screen:13});await renderResult(r);}}
-async function renderResult(a){const r=a.result;const served=['water','tea'].includes(r.listener_action);layout(served?'对方拿来了这杯':'对方没听清');if(served)picture(r.listener_action);else picture(s.learner_private_state.secret_choice,'cue');const last=s.attempts.filter(x=>x.mode==='S').length>=3;const success=r.action_matches_intent===true&&!r.requested_repeat;if(success||last){const finish=async()=>{s=await api('settle',{});await log('AUTO_ADVANCE',{step:'evidence_settled'});s=await api('end',{});await log('AUTO_ADVANCE',{step:'pilot_ended'});await render()};if(served)await playThen('A04',()=>{later(finish,1400)});else later(finish,1800);return;}
+async function renderWait(a){diagnostic('listener_pending',{attempt_id:a.attempt_id});layout('对方正在听');text('p',LOCAL?'请协助者只听这次声音，然后带回回应。':'稍等一下。');if(LOCAL)action('请协助者回应',()=>{location.href='./pilot.html'},'navigation');second('听听自己',()=>ownPlayback(a));let checking=true;poll=setInterval(async()=>{if(checking||playing)return;checking=true;try{await check(a)}catch(e){notice.textContent='还在等待，进度已保存。';}finally{checking=false}},1800);try{await check(a)}finally{checking=false;}}
+async function check(a){const r=await api('result/'+a.attempt_id);if(r.result){diagnostic('listener_closed',{attempt_id:a.attempt_id});clearInterval(poll);await log('AUTO_ADVANCE',{step:'listener_result'});s=await api('state');await persist({screen:13});await renderResult(r);}}
+async function renderResult(a){const r=a.result;const served=['water','tea'].includes(r.listener_action);layout(served?'对方拿来了这杯':'对方没听清');if(served)picture(r.listener_action);else picture(s.learner_private_state.secret_choice,'cue');const last=s.attempts.filter(x=>x.mode==='S').length>=3;const success=r.action_matches_intent===true&&!r.requested_repeat;if(success||last){const finish=async()=>{s=await api('settle',{});diagnostic('evidence_settled');await log('AUTO_ADVANCE',{step:'evidence_settled'});s=await api('end',{});diagnostic('pilot_end');await log('AUTO_ADVANCE',{step:'pilot_ended'});await render()};if(served)await playThen('A04',()=>{later(finish,1400)});else later(finish,1800);return;}
  layout(served?'再说一次你想要的':'对方没听清');picture(s.learner_private_state.secret_choice,'cue');await log('AUTO_ADVANCE',{step:'listener_repeat_prepared'});s=await api('repair',{repair_type:'listener_repeat',scope:'S',answer_help:false,support_level:'none',after_attempt:null});await persist({screen:11});recordControl('S','再说一次');second('听一次提示',helpSpeaking);
 }
-async function finish(){layout(s.final_outcome?.endsWith('_success')?'完成':'今天先到这里');text('p',s.final_outcome==='independent_success'?'这次，你自己说出了想要的饮品。':s.final_outcome==='supported_success'?'这次，你借助提示说出了想要的饮品。':'已保存尝试，下次再试。');second('下载本次记录',exportResults);}
+async function finish(){capture.cancel();player.release();layout(s.final_outcome?.endsWith('_success')?'完成':'今天先到这里');text('p',s.final_outcome==='independent_success'?'这次，你自己说出了想要的饮品。':s.final_outcome==='supported_success'?'这次，你借助提示说出了想要的饮品。':'已保存尝试，下次再试。');second('下载本次记录',exportResults);}
 async function exportResults(){return exportState();}
 async function render(){
  const n=s.screen;const library=document.querySelector('#library-link');if(library)library.hidden=!(LOCAL&&(n===0||s.ended));
@@ -104,10 +102,15 @@ async function render(){
  if(n===13){const a=s.attempts.filter(a=>a.result).at(-1);if(a)return renderResult(a);}
  if(n===15&&s.ended&&s.final_evidence_settled&&s.listener_closed)return finish();
 }
- const pauseButton=document.querySelector('#exit');if(pauseButton)pauseButton.onclick=safe(async()=>{if(playing){notice.textContent='听完这段声音后，可以暂停。';return}if(rec?.state==='recording'){notice.textContent='先松开，保存这段声音。';return}clearTimeout(timer);clearInterval(poll);epoch++;audio.pause();playing=false;await log('PILOT_PAUSE');layout('进度已保存');action('继续学习',async()=>{s=await api('state');await log('PILOT_RESUME');await render()},'navigation');});
- async function boot(){manifest=await (await fetch('./course/audio_manifest.json')).json();s=await api('state');if(s.recording_active){await log('DEVICE_ISSUE',{device_issue:'recording_interrupted_by_refresh'});await persist({recording_active:false});notice.textContent='刚才的录音中断了，请再说一次。';}await render();}
- safe(async()=>{try{if(LOCAL&&!globalThis.isSecureContext)throw Error('请使用HTTPS测试入口。');await boot();}catch(e){layout('暂时不能开始');notice.textContent=e.message;action('再试一次',boot,'recovery');}})();
-
-// Safari background/track interruption: preserve a captured attempt, never auto-end.
-if(document.addEventListener){document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(timer);if(rec?.state==='recording'){rec.stop();log('DEVICE_ISSUE',{device_issue:'background_recording_interrupted'}).catch(()=>{});}else if(playing){audio.pause();} }else if(pendingTransition){drainTransition(true);}else if(s&&!recordBusy&&!playing){api('state').then(v=>{s=v;return render()}).catch(fail);}});}
-if(LOCAL&&navigator.serviceWorker)navigator.serviceWorker.register('./sw.js').catch(()=>{});
+ const pauseButton=document.querySelector('#exit');if(pauseButton)pauseButton.onclick=safe(async()=>{if(playing){notice.textContent='听完这段声音后，可以暂停。';return}if(recordBusy){notice.textContent='先点一下结束录音。';return}clearTimeout(timer);clearInterval(poll);epoch++;player.stop();capture.closeStream();audio.pause();playing=false;await log('PILOT_PAUSE');layout('进度已保存');action('继续学习',async()=>{s=await api('state');await log('PILOT_RESUME');await render()},'navigation');});
+ async function recoverAndRender(){if(restoring)return;restoring=true;try{capture.cancel();player.release();playing=false;recordBusy=false;cancelTransition();s=await api('recover',{});await render();}finally{restoring=false;}}
+ async function boot(){manifest=await (await fetch('./course/audio_manifest.json')).json();s=await api('recover',{});diagnostic('app_started',{shell_version:'1.1.0-rc.1'});diagnostic('pwa_mode',{standalone:standalone()});diagnostic(navigator.onLine===false?'offline':'online');await render();}
+ safe(async()=>{try{if(LOCAL&&!globalThis.isSecureContext)throw Error('请使用HTTPS测试入口。');await boot();}catch(e){layout('暂时不能开始');notice.textContent='请回到课程首页，联网完成准备后再试。';action('返回课程',()=>{location.href='./index.html'},'recovery');}})();
+ // Media cannot survive a closed document. Live interruption never becomes success.
+ function suspend(){clearTimeout(timer);player.stop();capture.cancel();if(recordBusy){recordBusy=false;persist({recording_active:false}).catch(()=>{});}diagnostic('app_suspended');}
+ async function resume(){player.check();if(pendingTransition){drainTransition(true);return;}if(!restoring&&!recordBusy&&!playing&&s)await recoverAndRender();}
+ document.addEventListener?.('visibilitychange',()=>{if(document.hidden)suspend();else resume().catch(fail);});
+ window.addEventListener?.('pagehide',suspend);
+ window.addEventListener?.('pageshow',e=>{if(e.persisted)resume().catch(fail);});
+ window.addEventListener?.('online',()=>diagnostic('online'));window.addEventListener?.('offline',()=>diagnostic('offline'));
+ if(LOCAL&&navigator.serviceWorker)navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(()=>{});
