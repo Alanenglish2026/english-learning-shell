@@ -9,7 +9,7 @@ $('backup').onclick=()=>guard(exportState);$('restore').onchange=()=>guard(async
 async function checkReady(){
  if(!navigator.serviceWorker.controller)return false;
  const reply=await new Promise(resolve=>{const c=new MessageChannel(),timeout=setTimeout(()=>{c.port1.close();resolve({ready:false});},5000);c.port1.onmessage=e=>{clearTimeout(timeout);c.port1.close();resolve(e.data);};navigator.serviceWorker.controller.postMessage({type:'CHECK_READY'},[c.port2]);});
- ready=reply.ready===true&&reply.version==='1.1.0-rc.2';$('start').disabled=!ready;
+ ready=reply.ready===true&&reply.version==='1.1.0-rc.1';$('start').disabled=!ready;
  $('status').textContent=ready?'已准备好':navigator.onLine===false?'请先联网完成离线准备，再开始学习。':'正在准备离线使用…';if(ready)diag('sw_ready',{version:reply.version});return ready;
 }
 async function prepare(){
