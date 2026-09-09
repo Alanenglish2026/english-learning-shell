@@ -79,10 +79,62 @@ async function nextTrial(){const count=new Set(s.trials.map(t=>t.trial_id)).size
 async function listenRepair(){const t=s.trial;const count=(s.trial_repair||0)+1;await persist({trial_feedback:false,trial_repair:count});if(count===1){layout('再听一次');return listen();}t.help_used=true;s=await api('repair',{repair_type:'L_meaning_sound',scope:'L',support_level:'answer_audio_image',before_attempt:t.trial_id,after_attempt:t.trial_id,answer_help:false});await persist({trial:t});layout('看一眼，听一次');picture(t.target);text('p',t.target==='water'?'这是水。':'这是茶。');await playThen(t.target==='water'?'A01':'A02',async()=>{later(async()=>{layout('听');await listen()},1200)});}
 async function helpSpeaking(){s=await api('repair',{repair_type:'S_retrieval',answer_help:true,scope:'S',support_level:'answer_audio',after_attempt:null});layout('听一次，再试着说');picture(s.learner_private_state.secret_choice);await playThen(s.learner_private_state.secret_choice==='water'?'A01':'A02',()=>go(11));}
 async function send(a){await api('submit',{attempt_id:a.attempt_id});await persist({screen:12});await renderWait(a);}
-async function renderWait(a){diagnostic('listener_pending',{attempt_id:a.attempt_id});layout('对方正在听');text('p',LOCAL?'有协助者时，让对方只听这次声音；如果现在只有你自己，可以做单人自测。':'稍等一下。');if(LOCAL){action('让协助者听',()=>{location.href='./pilot.html?mode=helper'},'navigation');second('没有协助者：单人自测',()=>{location.href='./pilot.html?mode=self'});}else second('听听自己',()=>ownPlayback(a));let checking=true;poll=setInterval(async()=>{if(checking||playing)return;checking=true;try{await check(a)}catch(e){notice.textContent='还在等待，进度已保存。';}finally{checking=false}},1800);try{await check(a)}finally{checking=false;}}
+async function restartSpeaking(a,reason='retry'){
+ s=await api('cancel-pending',{attempt_id:a.attempt_id,reason});
+ await persist({screen:11});
+ await render();
+}
+function selfCheckChoices(a){
+ layout('单人自测：你听到什么？');
+ text('p','只用于继续课程，不计独立口语证据。按你刚才实际听到的内容选择。');
+ const box=document.createElement('div');box.className='self-check-actions';
+ const opts=[['听到：水','water'],['听到：茶','tea'],['请再说一次','repeat'],['没听懂','no_action']];
+ for(const [label,value] of opts){
+  const b=document.createElement('button');b.className=value==='water'||value==='tea'?'primary':'quiet';b.textContent=label;
+  b.onclick=safe(async()=>{box.querySelectorAll('button').forEach(x=>x.disabled=true);await log('CLICK',{click_type:'learning',action:'self_check_'+value});
+   await api('listener-return',{ticket:a.ticket,result:{listener_heard:'',listener_confidence:'self_check',listener_action:value,requested_repeat:value==='repeat',blind_attested:false,audio_listened:true,adapter:'self_check'}});
+   diagnostic('listener_closed',{attempt_id:a.attempt_id,adapter:'self_check'});s=await api('state');await persist({screen:13});await render();
+  });box.append(b);
+ }
+ body.append(box);
+ second('重新说一次',()=>restartSpeaking(a,'self_check_retake'));
+}
+async function inlineSelfCheck(a){
+ layout('单人自测');
+ text('p','先完整听一次自己的声音。听完后再按实际听到的内容选择。');
+ let url=null;
+ try{
+  const r=await fetch('./api/recording/'+a.attempt_id);
+  if(!r.ok)throw Error('recording_missing');
+  const blob=await r.blob();
+  if(blob.size<256)throw Error('recording_missing');
+  url=URL.createObjectURL(blob);playing=true;diagnostic('recording_playback_started',{attempt_id:a.attempt_id,mode:'self_check'});
+  await player.play(url,{id:'self_check_voice',manual:true});playing=false;
+  diagnostic('recording_playback_ended',{attempt_id:a.attempt_id,mode:'self_check'});await log('SELF_CHECK_PLAYBACK',{attempt_id:a.attempt_id});
+  selfCheckChoices(a);
+ }catch(e){
+  playing=false;await log('DEVICE_ISSUE',{device_issue:e.message,attempt_id:a.attempt_id});
+  layout('这次声音没有播放完整');
+  text('p',e.message==='recording_missing'?'这次临时录音已经不存在。重新说一次就可以继续。':'这次录音没有完整播放。可以重新播放，或重新说一次。');
+  if(e.message!=='recording_missing')action('再听一次',()=>inlineSelfCheck(a),'recovery');else action('重新说一次',()=>restartSpeaking(a,'recording_missing'),'recovery');
+  if(e.message!=='recording_missing')second('重新说一次',()=>restartSpeaking(a,'self_check_playback_failed'));
+ }finally{playing=false;player.release();if(url)URL.revokeObjectURL(url);}
+}
+async function renderWait(a){
+ diagnostic('listener_pending',{attempt_id:a.attempt_id});layout('这次表达还在等待验证');
+ text('p',LOCAL?'有协助者时，让对方只听这次声音；现在只有你自己时，直接做单人自测。':'稍等一下。');
+ if(LOCAL){action('让协助者听',()=>{location.href='./pilot.html?mode=helper'},'navigation');second('没有协助者：单人自测',()=>inlineSelfCheck(a));}
+ else second('听听自己',()=>ownPlayback(a));
+ let checking=true;poll=setInterval(async()=>{if(checking||playing)return;checking=true;try{await check(a)}catch(e){notice.textContent='还在等待，进度已保存。';}finally{checking=false}},1800);
+ try{await check(a)}finally{checking=false;}
+}
 async function check(a){const r=await api('result/'+a.attempt_id);if(r.result){diagnostic('listener_closed',{attempt_id:a.attempt_id});clearInterval(poll);await log('AUTO_ADVANCE',{step:'listener_result'});s=await api('state');await persist({screen:13});await renderResult(r);}}
-async function renderResult(a){const r=a.result;const served=['water','tea'].includes(r.listener_action);layout(served?'对方拿来了这杯':'对方没听清');if(served)picture(r.listener_action);else picture(s.learner_private_state.secret_choice,'cue');const last=s.attempts.filter(x=>x.mode==='S').length>=3;const success=r.action_matches_intent===true&&!r.requested_repeat;if(success||last){const finish=async()=>{s=await api('settle',{});diagnostic('evidence_settled');await log('AUTO_ADVANCE',{step:'evidence_settled'});s=await api('end',{});diagnostic('pilot_end');await log('AUTO_ADVANCE',{step:'pilot_ended'});await render()};if(served)await playThen('A04',()=>{later(finish,1400)});else later(finish,1800);return;}
- layout(served?'再说一次你想要的':'对方没听清');picture(s.learner_private_state.secret_choice,'cue');await log('AUTO_ADVANCE',{step:'listener_repeat_prepared'});s=await api('repair',{repair_type:'listener_repeat',scope:'S',answer_help:false,support_level:'none',after_attempt:null});await persist({screen:11});recordControl('S','再说一次');second('听一次提示',helpSpeaking);
+async function renderResult(a){const r=a.result,selfCheck=r.adapter==='self_check',served=['water','tea'].includes(r.listener_action);
+ layout(selfCheck?(served?'单人自测：你听到了这杯':'单人自测：这次没听清'):(served?'对方拿来了这杯':'对方没听清'));
+ if(served)picture(r.listener_action);else picture(s.learner_private_state.secret_choice,'cue');
+ const last=s.attempts.filter(x=>x.mode==='S').length>=3;const success=r.action_matches_intent===true&&!r.requested_repeat;
+ if(success||last){const finish=async()=>{s=await api('settle',{});diagnostic('evidence_settled');await log('AUTO_ADVANCE',{step:'evidence_settled'});s=await api('end',{});diagnostic('pilot_end');await log('AUTO_ADVANCE',{step:'pilot_ended'});await render()};if(served&&!selfCheck)await playThen('A04',()=>{later(finish,1400)});else later(finish,selfCheck?1200:1800);return;}
+ layout(selfCheck?'再说一次':'再说一次你想要的');picture(s.learner_private_state.secret_choice,'cue');await log('AUTO_ADVANCE',{step:'listener_repeat_prepared'});s=await api('repair',{repair_type:'listener_repeat',scope:'S',answer_help:false,support_level:'none',after_attempt:null});await persist({screen:11});recordControl('S','再说一次');second('听一次提示',helpSpeaking);
 }
 async function finish(){capture.cancel();player.release();const lastS=s.attempts.filter(a=>a.mode==='S'&&a.result).at(-1),selfCheck=lastS?.result?.adapter==='self_check';layout(s.final_outcome?.endsWith('_success')?'完成':selfCheck?'单人自测完成':'今天先到这里');text('p',s.final_outcome==='independent_success'?'这次，你自己说出了想要的饮品。':s.final_outcome==='supported_success'?'这次，你借助提示说出了想要的饮品。':selfCheck?'这次只完成了单人自测，不计独立口语证据；以后有真实听者时再验证。':'已保存尝试，下次再试。');second('下载本次记录',exportResults);}
 async function exportResults(){return exportState();}
@@ -98,13 +150,13 @@ async function render(){
  if(n===9){layout('现在，选你真正想要的');later(()=>go(10,'model_withdrawn'),2400);return;}
  if(n===10){if(s.learner_private_state.locked)return go(11,'choice_locked');layout('选你真正想要的');pairs(async w=>{s=await api('choice',{choice:w});await go(11,'choice_locked')});return;}
  if(n===11){const pending=s.attempts.filter(a=>a.mode==='S'&&!a.result).at(-1);if(pending)return send(pending);layout('说给对方听');picture(s.learner_private_state.secret_choice,'cue');await log('MEANING_CUE',{meaning_cue_visible:true});recordControl('S','按住说给对方听');second('听一次提示',helpSpeaking);return;}
- if(n===12){const a=s.attempts.filter(a=>a.mode==='S').at(-1);if(a)return a.ticket?renderWait(a):send(a);}
- if(n===13){const a=s.attempts.filter(a=>a.result).at(-1);if(a)return renderResult(a);}
+ if(n===12){const a=s.attempts.filter(a=>a.mode==='S').at(-1);if(!a){await persist({screen:11});return render();}return a.ticket?renderWait(a):send(a);}
+ if(n===13){const a=s.attempts.filter(a=>a.result).at(-1);if(!a){await persist({screen:11});return render();}return renderResult(a);}
  if(n===15&&s.ended&&s.final_evidence_settled&&s.listener_closed)return finish();
 }
  const pauseButton=document.querySelector('#exit');if(pauseButton)pauseButton.onclick=safe(async()=>{if(playing){notice.textContent='听完这段声音后，可以暂停。';return}if(recordBusy){notice.textContent='先点一下结束录音。';return}clearTimeout(timer);clearInterval(poll);epoch++;player.stop();capture.closeStream();audio.pause();playing=false;await log('PILOT_PAUSE');layout('进度已保存');action('继续学习',async()=>{s=await api('state');await log('PILOT_RESUME');await render()},'navigation');});
  async function recoverAndRender(){if(restoring)return;restoring=true;try{capture.cancel();player.release();playing=false;recordBusy=false;cancelTransition();s=await api('recover',{});await render();}finally{restoring=false;}}
- async function boot(){manifest=await (await fetch('./course/audio_manifest.json')).json();s=await api('recover',{});diagnostic('app_started',{shell_version:'1.1.0-rc.3'});diagnostic('pwa_mode',{standalone:standalone()});diagnostic(navigator.onLine===false?'offline':'online');await render();}
+ async function boot(){manifest=await (await fetch('./course/audio_manifest.json')).json();s=await api('recover',{});diagnostic('app_started',{shell_version:'1.1.0-rc.4'});diagnostic('pwa_mode',{standalone:standalone()});diagnostic(navigator.onLine===false?'offline':'online');await render();}
  safe(async()=>{try{if(LOCAL&&!globalThis.isSecureContext)throw Error('请使用HTTPS测试入口。');await boot();}catch(e){layout('暂时不能开始');notice.textContent='请回到课程首页，联网完成准备后再试。';action('返回课程',()=>{location.href='./index.html'},'recovery');}})();
  // Media cannot survive a closed document. Live interruption never becomes success.
  function suspend(){clearTimeout(timer);player.stop();capture.cancel();if(recordBusy){recordBusy=false;persist({recording_active:false}).catch(()=>{});}diagnostic('app_suspended');}

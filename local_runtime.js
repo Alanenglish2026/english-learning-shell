@@ -35,6 +35,12 @@ export class LocalRuntime {
    ops.push({store:'media',value:{id,blob,sha256:a.sha256,lifecycle:'RAW_CURRENT_ATTEMPTS',critical:true,exported:false,timestamp:a.timestamp}});s.attempts.push(a);s.recording_active=false;for(const repair of s.repairs)if(d.mode==='S'&&repair.scope==='S'&&!repair.after_attempt)repair.after_attempt=id;event('RECORD_SAVED',{attempt_id:id,modality:d.mode,learner_audio:a.audio_file,target:a.meaning_target,independent_support:a.support_state,meaning_cue_visible:a.meaning_cue_visible});answer=a;
   }
   else if(path==='submit'){const a=s.attempts.find(a=>a.attempt_id===d.attempt_id);if(!a||a.mode!=='S')throw Error('录音不存在。');a.ticket ||= uid();answer={manual:true,attempt_id:a.attempt_id};}
+  else if(path==='cancel-pending'){
+   const a=s.attempts.find(a=>a.attempt_id===d.attempt_id&&a.mode==='S'&&!a.result);if(!a)throw Error('这次等待已经结束。');
+   s.interrupted_attempts=[...(s.interrupted_attempts||[]),{...a,ticket:undefined,recovery_reason:d.reason||'learner_retake'}];
+   s.attempts=s.attempts.filter(x=>x!==a);ops.push({store:'media',delete:true,id:a.attempt_id});s.recording_active=false;s.final_evidence_settled=false;s.ended=false;s.screen=11;
+   event('PENDING_ATTEMPT_CANCELLED',{attempt_id:a.attempt_id,notes:d.reason||'learner_retake'});answer=s;
+  }
   else if(path.startsWith('result/')){answer=s.attempts.find(a=>a.attempt_id===path.split('/')[1]);if(!answer)throw Error('录音不存在。');}
   else if(path==='listener-return'){
    const a=s.attempts.find(a=>a.ticket===d.ticket);if(!a||a.result)throw Error('回应已锁定或不属于这次录音。');const r=d.result;
