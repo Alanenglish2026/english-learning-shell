@@ -1,7 +1,7 @@
 {
-  "shell_version": "1.1.0-rc.4",
+  "shell_version": "1.1.0-rc.5",
   "lesson_engine": "u01-frozen-v1",
   "unit_format": 1,
   "learner_audio_policy": "session-temporary",
-  "version": "1.1.0-rc.4"
+  "version": "1.1.0-rc.5"
 }

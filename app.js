@@ -5,6 +5,7 @@ import {bindHold} from './hold.js';
 import {AUTO_STEPS} from './ux_policy.js';
 import {lessonFetch as fetch,LOCAL,saveRecording} from './transport.js';
 import {exportState} from './transfer.js';
+const BUILD='1.1.0-rc.5';
 const el=document.querySelector('#app'),notice=document.querySelector('#notice');
 const token='';
 history.replaceState(null,'',location.pathname);
@@ -78,7 +79,7 @@ async function answer(w){const done=completeTrial(s.trial,w,Date.now());await lo
 async function nextTrial(){const count=new Set(s.trials.map(t=>t.trial_id)).size;await log('AUTO_ADVANCE',{step:count>=2?'listening_2_feedback':'listening_1_feedback'});if(count>=2)return go(7);await persist({trial:newTrial(),trial_feedback:false,trial_repair:0});layout('听');await listen();}
 async function listenRepair(){const t=s.trial;const count=(s.trial_repair||0)+1;await persist({trial_feedback:false,trial_repair:count});if(count===1){layout('再听一次');return listen();}t.help_used=true;s=await api('repair',{repair_type:'L_meaning_sound',scope:'L',support_level:'answer_audio_image',before_attempt:t.trial_id,after_attempt:t.trial_id,answer_help:false});await persist({trial:t});layout('看一眼，听一次');picture(t.target);text('p',t.target==='water'?'这是水。':'这是茶。');await playThen(t.target==='water'?'A01':'A02',async()=>{later(async()=>{layout('听');await listen()},1200)});}
 async function helpSpeaking(){s=await api('repair',{repair_type:'S_retrieval',answer_help:true,scope:'S',support_level:'answer_audio',after_attempt:null});layout('听一次，再试着说');picture(s.learner_private_state.secret_choice);await playThen(s.learner_private_state.secret_choice==='water'?'A01':'A02',()=>go(11));}
-async function send(a){await api('submit',{attempt_id:a.attempt_id});await persist({screen:12});await renderWait(a);}
+async function send(a){const submitted=await api('submit',{attempt_id:a.attempt_id});a={...a,ticket:submitted.ticket};await persist({screen:12});s=await api('state');const fresh=s.attempts.find(x=>x.attempt_id===a.attempt_id&&x.mode==='S')||a;await renderWait(fresh);}
 async function restartSpeaking(a,reason='retry'){
  s=await api('cancel-pending',{attempt_id:a.attempt_id,reason});
  await persist({screen:11});
@@ -92,7 +93,7 @@ function selfCheckChoices(a){
  for(const [label,value] of opts){
   const b=document.createElement('button');b.className=value==='water'||value==='tea'?'primary':'quiet';b.textContent=label;
   b.onclick=safe(async()=>{box.querySelectorAll('button').forEach(x=>x.disabled=true);await log('CLICK',{click_type:'learning',action:'self_check_'+value});
-   await api('listener-return',{ticket:a.ticket,result:{listener_heard:'',listener_confidence:'self_check',listener_action:value,requested_repeat:value==='repeat',blind_attested:false,audio_listened:true,adapter:'self_check'}});
+   await api('listener-return',{attempt_id:a.attempt_id,ticket:a.ticket,result:{listener_heard:'',listener_confidence:'self_check',listener_action:value,requested_repeat:value==='repeat',blind_attested:false,audio_listened:true,adapter:'self_check'}});
    diagnostic('listener_closed',{attempt_id:a.attempt_id,adapter:'self_check'});s=await api('state');await persist({screen:13});await render();
   });box.append(b);
  }
@@ -129,14 +130,14 @@ async function renderWait(a){
  try{await check(a)}finally{checking=false;}
 }
 async function check(a){const r=await api('result/'+a.attempt_id);if(r.result){diagnostic('listener_closed',{attempt_id:a.attempt_id});clearInterval(poll);await log('AUTO_ADVANCE',{step:'listener_result'});s=await api('state');await persist({screen:13});await renderResult(r);}}
-async function renderResult(a){const r=a.result,selfCheck=r.adapter==='self_check',served=['water','tea'].includes(r.listener_action);
+async function renderResult(a){if(!a||a.mode!=='S'||!a.result){s=await api('recover',{});return render();}const r=a.result,selfCheck=r.adapter==='self_check',served=['water','tea'].includes(r.listener_action);
  layout(selfCheck?(served?'单人自测：你听到了这杯':'单人自测：这次没听清'):(served?'对方拿来了这杯':'对方没听清'));
  if(served)picture(r.listener_action);else picture(s.learner_private_state.secret_choice,'cue');
  const last=s.attempts.filter(x=>x.mode==='S').length>=3;const success=r.action_matches_intent===true&&!r.requested_repeat;
  if(success||last){const finish=async()=>{s=await api('settle',{});diagnostic('evidence_settled');await log('AUTO_ADVANCE',{step:'evidence_settled'});s=await api('end',{});diagnostic('pilot_end');await log('AUTO_ADVANCE',{step:'pilot_ended'});await render()};if(served&&!selfCheck)await playThen('A04',()=>{later(finish,1400)});else later(finish,selfCheck?1200:1800);return;}
  layout(selfCheck?'再说一次':'再说一次你想要的');picture(s.learner_private_state.secret_choice,'cue');await log('AUTO_ADVANCE',{step:'listener_repeat_prepared'});s=await api('repair',{repair_type:'listener_repeat',scope:'S',answer_help:false,support_level:'none',after_attempt:null});await persist({screen:11});recordControl('S','再说一次');second('听一次提示',helpSpeaking);
 }
-async function finish(){capture.cancel();player.release();const lastS=s.attempts.filter(a=>a.mode==='S'&&a.result).at(-1),selfCheck=lastS?.result?.adapter==='self_check';layout(s.final_outcome?.endsWith('_success')?'完成':selfCheck?'单人自测完成':'今天先到这里');text('p',s.final_outcome==='independent_success'?'这次，你自己说出了想要的饮品。':s.final_outcome==='supported_success'?'这次，你借助提示说出了想要的饮品。':selfCheck?'这次只完成了单人自测，不计独立口语证据；以后有真实听者时再验证。':'已保存尝试，下次再试。');second('下载本次记录',exportResults);}
+async function finish(){capture.cancel();player.release();const lastS=s.attempts.filter(a=>a.mode==='S'&&a.result).at(-1),selfCheck=lastS?.result?.adapter==='self_check';layout(s.final_outcome?.endsWith('_success')?'完成':selfCheck?'单人自测完成':'今天先到这里');text('p',s.final_outcome==='independent_success'?'这次，你自己说出了想要的饮品。':s.final_outcome==='supported_success'?'这次，你借助提示说出了想要的饮品。':selfCheck?'这次只完成了单人自测，不计独立口语证据；以后有真实听者时再验证。':'已保存尝试，下次再试。');action('回到课程',()=>{location.href='./index.html'},'navigation');second('再学一次',async()=>{s=await api('new-session',{reason:'finish_restart'});await render();});}
 async function exportResults(){return exportState();}
 async function render(){
  const n=s.screen;const library=document.querySelector('#library-link');if(library)library.hidden=!(LOCAL&&(n===0||s.ended));
@@ -151,12 +152,12 @@ async function render(){
  if(n===10){if(s.learner_private_state.locked)return go(11,'choice_locked');layout('选你真正想要的');pairs(async w=>{s=await api('choice',{choice:w});await go(11,'choice_locked')});return;}
  if(n===11){const pending=s.attempts.filter(a=>a.mode==='S'&&!a.result).at(-1);if(pending)return send(pending);layout('说给对方听');picture(s.learner_private_state.secret_choice,'cue');await log('MEANING_CUE',{meaning_cue_visible:true});recordControl('S','按住说给对方听');second('听一次提示',helpSpeaking);return;}
  if(n===12){const a=s.attempts.filter(a=>a.mode==='S').at(-1);if(!a){await persist({screen:11});return render();}return a.ticket?renderWait(a):send(a);}
- if(n===13){const a=s.attempts.filter(a=>a.result).at(-1);if(!a){await persist({screen:11});return render();}return renderResult(a);}
+ if(n===13){const a=s.attempts.filter(a=>a.mode==='S'&&a.result).at(-1);if(!a){s=await api('recover',{});if(s.screen===13)await persist({screen:11});return render();}return renderResult(a);}
  if(n===15&&s.ended&&s.final_evidence_settled&&s.listener_closed)return finish();
 }
  const pauseButton=document.querySelector('#exit');if(pauseButton)pauseButton.onclick=safe(async()=>{if(playing){notice.textContent='听完这段声音后，可以暂停。';return}if(recordBusy){notice.textContent='先点一下结束录音。';return}clearTimeout(timer);clearInterval(poll);epoch++;player.stop();capture.closeStream();audio.pause();playing=false;await log('PILOT_PAUSE');layout('进度已保存');action('继续学习',async()=>{s=await api('state');await log('PILOT_RESUME');await render()},'navigation');});
  async function recoverAndRender(){if(restoring)return;restoring=true;try{capture.cancel();player.release();playing=false;recordBusy=false;cancelTransition();s=await api('recover',{});await render();}finally{restoring=false;}}
- async function boot(){manifest=await (await fetch('./course/audio_manifest.json')).json();s=await api('recover',{});diagnostic('app_started',{shell_version:'1.1.0-rc.4'});diagnostic('pwa_mode',{standalone:standalone()});diagnostic(navigator.onLine===false?'offline':'online');await render();}
+ async function boot(){const v=await globalThis.fetch('./version.json',{cache:'reload'}).then(r=>r.json());if(v.shell_version!==BUILD)throw Error('版本更新还没完成，请关闭所有英语学习页面后重新打开。');manifest=await (await fetch('./course/audio_manifest.json')).json();s=await api('recover',{});diagnostic('app_started',{shell_version:BUILD});diagnostic('pwa_mode',{standalone:standalone()});diagnostic(navigator.onLine===false?'offline':'online');await render();}
  safe(async()=>{try{if(LOCAL&&!globalThis.isSecureContext)throw Error('请使用HTTPS测试入口。');await boot();}catch(e){layout('暂时不能开始');notice.textContent='请回到课程首页，联网完成准备后再试。';action('返回课程',()=>{location.href='./index.html'},'recovery');}})();
  // Media cannot survive a closed document. Live interruption never becomes success.
  function suspend(){clearTimeout(timer);player.stop();capture.cancel();if(recordBusy){recordBusy=false;persist({recording_active:false}).catch(()=>{});}diagnostic('app_suspended');}
