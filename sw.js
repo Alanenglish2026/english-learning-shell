@@ -1,0 +1,11 @@
+const BASE=new URL('./',self.registration.scope),SHELL='english-shell-pages-v1';
+const FILES=["./base.js", "./pilot.html", "./pilot.js", "./version.json", "./storage.js", "./transport.js", "./transfer.js", "./index.html", "./shell.js", "./hold.js", "./app.js", "./ux_policy.js", "./blind_panel.html", "./manifest.json", "./core.js", "./local_runtime.js", "./packages.js", "./lesson.html", "./style.css", "./icons/icon.png", "./icons/icon.svg", "./vendor/jszip.min.js", "./vendor/LICENSE_JSZIP.txt"];
+self.addEventListener('install',e=>e.waitUntil(caches.open(SHELL).then(c=>c.addAll(FILES.map(p=>new URL(p,BASE).href)))));
+self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));
+function installed(){return new Promise((resolve,reject)=>{const q=indexedDB.open('english-course-shell:'+BASE.pathname,1);q.onerror=()=>reject(q.error);q.onsuccess=()=>{const db=q.result;if(!db.objectStoreNames.contains('critical')){db.close();resolve(null);return;}const r=db.transaction('critical').objectStore('critical').get('installed:U01');r.onsuccess=()=>{resolve(r.result);db.close()};r.onerror=()=>{reject(r.error);db.close()};};});}
+async function rangeResponse(r,range){if(!range)return r;const match=/^bytes=(\d+)-(\d*)$/.exec(range);if(!match)return r;const b=await r.blob(),start=Number(match[1]),end=match[2]?Math.min(Number(match[2]),b.size-1):b.size-1;if(start>end)return new Response(null,{status:416});return new Response(b.slice(start,end+1),{status:206,headers:{'Content-Type':r.headers.get('Content-Type'),'Content-Range':`bytes ${start}-${end}/${b.size}`,'Content-Length':String(end-start+1),'Accept-Ranges':'bytes'}});}
+self.addEventListener('fetch',e=>{const u=new URL(e.request.url);if(e.request.method!=='GET'||u.origin!==BASE.origin||!u.pathname.startsWith(BASE.pathname))return;const path=u.pathname.slice(BASE.pathname.length);
+ e.respondWith((async()=>{if(path.startsWith('course/')){const unit=await installed();if(!unit)return new Response('请先导入课件',{status:404});const r=await(await caches.open(unit.cacheName)).match(new URL(path,BASE).href);return r?rangeResponse(r,e.request.headers.get('Range')):new Response('请重新导入课件',{status:404});}
+  const c=await caches.open(SHELL),r=await c.match(new URL(path||'index.html',BASE).href);return r||fetch(e.request);
+ })());
+});

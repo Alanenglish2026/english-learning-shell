@@ -1,0 +1,8 @@
+import {storage} from './storage.js';import {UnitInstaller,INSTALLED} from './packages.js';import {exportState,restoreProgress} from './transfer.js';
+const $=id=>document.getElementById(id),installer=new UnitInstaller();let ready=false;
+async function refresh(){const installed=await storage.get('critical',INSTALLED);$('course').textContent=installed?'已安装课程：U01 Day1':'还没有导入课件';$('start').hidden=!installed;}
+async function guard(fn){try{await fn()}catch(e){$('status').textContent=e.message;}}
+$('import').onclick=()=>$('package').click();$('package').onchange=()=>guard(async()=>{const f=$('package').files[0];if(!f)return;$('import').disabled=true;try{$('status').textContent='正在检查并安装，请稍等。';await installer.install(f);await refresh();$('status').textContent='课件已安装，可以开始学习。';}finally{$('import').disabled=false;$('package').value='';}});
+$('start').onclick=()=>guard(async()=>{if(!ready||!navigator.serviceWorker.controller)throw Error('离线准备尚未完成，请联网重新打开一次。');location.href='./lesson.html';});
+$('backup').onclick=()=>guard(exportState);$('restore').onchange=()=>guard(async()=>{const f=$('restore').files[0];if(f){const r=await restoreProgress(f);$('status').textContent=r.interrupted_audio?'进度已恢复；中断且无原音的那次说话需要重试。':'进度已恢复。';}});
+guard(async()=>{await refresh();if(!globalThis.isSecureContext||!navigator.serviceWorker)throw Error('请从GitHub Pages的HTTPS网址打开。');await navigator.serviceWorker.register('./sw.js',{scope:'./'});await navigator.serviceWorker.ready;ready=true;if(!navigator.serviceWorker.controller)navigator.serviceWorker.addEventListener('controllerchange',()=>{ready=true;$('status').textContent='已准备好。';},{once:true});});

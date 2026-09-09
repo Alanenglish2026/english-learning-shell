@@ -1,0 +1,3 @@
+export function newTrial(random=Math.random){return {trial_id:crypto.randomUUID(),target:random()<.5?'water':'tea',first_play:false,replay_count:0,help_used:false,learner_action:null,correct:null,latency:null,evidence_status:'not_tested',plays:0};}
+export function completeTrial(t,action,at){return {...t,learner_action:action,correct:action===t.target,latency:Math.max(0,at-t.heard_at),evidence_status:action!==t.target?'unsuccessful':t.help_used?'supported':t.replay_count?'independent_after_replay':'independent_first_play'};}
+export function summarize(trials){return Object.fromEntries(['water','tea'].map(w=>[w,trials.filter(t=>t.target===w).map(t=>t.evidence_status)]));}
