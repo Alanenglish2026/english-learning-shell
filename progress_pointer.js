@@ -1,0 +1,3 @@
+export function sessionKind(s={}){return s.session_kind==='review'?'review':'lesson';}
+export function progressPointerKey(s){if(!s?.unit_id)throw Error('缺少Unit。');return (sessionKind(s)==='review'?'review_progress:':'progress:')+s.unit_id;}
+export function progressRecord(s){return {unit_id:s.unit_id,session_id:s.session_id,session_kind:sessionKind(s),status:s.status,started_at:s.started_at,updated_at:s.updated_at,completed_at:s.completed_at||null,can_do:s.final_outcome||null,review_item_id:s.review_item_id||null,return_session_id:s.return_session_id||null,review_generation:s.review_generation||null,current_domain_state:s.current_domain_state,current_activity_id:s.current_activity_id,last_safe_checkpoint:s.last_safe_checkpoint};}

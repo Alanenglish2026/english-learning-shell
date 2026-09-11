@@ -1,38 +1,46 @@
-import {storage} from './storage.js';import {UnitInstaller,INSTALLED} from './packages.js';import {exportState,restoreProgress} from './transfer.js';import {runtime} from './local_runtime.js';
-const BUILD='1.1.0-rc.5',$=id=>document.getElementById(id),installer=new UnitInstaller();let ready=false,currentSession=null;
-const diag=(type,extra={})=>runtime.request('event',{evidence_type:type,...extra}).catch(()=>{});
-async function refresh(){
- const installed=await storage.get('critical',INSTALLED);currentSession=(await storage.get('critical','session'))?.value||null;
- $('course').textContent=installed?'已安装课程：U01 Day1':'还没有导入课件';$('start').hidden=!installed;$('restart').hidden=true;
- if(!installed)return;
- if(currentSession?.ended){$('start').textContent='再学一次';}
- else if(currentSession?.pilot_started_at&&currentSession.screen>0){$('start').textContent='继续学习';$('restart').hidden=false;}
- else $('start').textContent='开始学习';
-}
+import {exportDiagnostic} from './diagnostic.js';
+import {storage} from './storage.js';import {UnitInstaller} from './packages.js';import {exportState,restoreProgress} from './transfer.js';import {runtime} from './local_runtime.js';import {library} from './library.js';import {BUILD} from './build.js';
+const $=id=>document.getElementById(id),installer=new UnitInstaller();let ready=false,currentInstalled=null,currentSession=null,registration=null;
+const diag=(type,extra={})=>runtime.request('event',{evidence_type:type,...extra,_core_build:BUILD}).catch(()=>{});
 async function guard(fn){try{await fn()}catch(e){$('status').textContent=e.message;}}
-$('import').onclick=()=>$('package').click();
-$('package').onchange=()=>guard(async()=>{const f=$('package').files[0];if(!f)return;$('import').disabled=true;try{$('status').textContent='正在检查并安装，请稍等。';await installer.install(f);await refresh();$('status').textContent=ready?'课件已安装，已准备好。':'课件已安装，正在准备离线使用…';}finally{$('import').disabled=false;$('package').value='';}});
-$('start').onclick=()=>guard(async()=>{if(!ready||!navigator.serviceWorker.controller)throw Error('离线准备尚未完成，请联网重新打开一次。');if(currentSession?.ended){await runtime.request('new-session',{reason:'completed_restart'});await refresh();}location.href='./lesson.html';});
-$('restart').onclick=()=>guard(async()=>{if(!confirm('重新开始本课？本次未完成的临时录音会清理，已保存的历史记录不会删除。'))return;await runtime.request('new-session',{reason:'learner_restart'});await refresh();location.href='./lesson.html';});
-$('backup').onclick=()=>guard(exportState);
-$('restore').onchange=()=>guard(async()=>{const f=$('restore').files[0];if(f){const r=await restoreProgress(f);await refresh();$('status').textContent=r.interrupted_audio?'进度已恢复；中断且无原音的那次说话需要重试。':'进度已恢复。';}});
-async function checkReady(){
- if(!navigator.serviceWorker.controller)return false;
- const reply=await new Promise(resolve=>{const c=new MessageChannel(),timeout=setTimeout(()=>{c.port1.close();resolve({ready:false});},5000);c.port1.onmessage=e=>{clearTimeout(timeout);c.port1.close();resolve(e.data);};navigator.serviceWorker.controller.postMessage({type:'CHECK_READY'},[c.port2]);});
- ready=reply.ready===true&&reply.version===BUILD;$('start').disabled=!ready;$('restart').disabled=!ready;
- $('status').textContent=ready?'已准备好':navigator.onLine===false?'请先联网完成离线准备，再开始学习。':'正在准备离线使用…';if(ready)diag('sw_ready',{version:reply.version});return ready;
+async function enter(row,intent){const out=await library.openUnit(row.unit_id,intent,{online:navigator.onLine!==false,shellReady:ready});location.href=out.url;}
+function button(label,fn,parent){const b=document.createElement('button');b.textContent=label;b.className='quiet';b.onclick=()=>guard(fn);parent.append(b);return b;}
+async function directory(filter){const box=$('directory');box.hidden=false;box.replaceChildren();const h=document.createElement('h2');h.textContent='课程目录';box.append(h);
+ for(const row of (await library.list()).filter(r=>typeof filter!=='string'||r.unit_type===filter)){button(row.title+' · '+row.state,async()=>{box.replaceChildren();const title=document.createElement('h2');title.textContent=row.title;box.append(title);const label=row.state==='课件需要重新连接'?'重新连接课件':row.state==='已完成'?'再学一次':row.state==='未开始'?'开始学习':'继续学习';const b=button(label,()=>label==='重新连接课件'?$('package').click():enter(row,label==='再学一次'?'replay':label==='开始学习'?'start':'resume'),box);b.className='primary';if(row.state==='学习中')button('重新开始本课',async()=>{if(confirm('重新开始本课？已保存的历史记录会保留。'))await enter(row,'restart');},box);button('返回目录',directory,box);},box);}}
+async function refresh(){const rows=await library.list(),due=await library.due();if($('practice')){$('practice').hidden=due.length===0;$('practice').textContent=due.length?'巩固练习 · 今日 '+due.length+' 项':'巩固练习';$('practice').onclick=()=>guard(async()=>{const current=(await storage.get('critical','session'))?.value;if(current?.session_kind==='review'&&['new','active','interrupted'].includes(current.status)){location.href='./activity.html?unit='+encodeURIComponent(current.unit_id)+'&session='+current.session_id;return;}const item=due[0];if(!item)return;const out=await library.openUnit(item.unit_id,'review',{online:navigator.onLine!==false,shellReady:ready,review_item_id:item.id});location.href=out.url;});}if($('continuous')){$('continuous').hidden=!rows.some(r=>r.unit_type==='continuous_listening');$('continuous').onclick=()=>guard(()=>directory('continuous_listening'));}const row=await library.continuation();currentInstalled=row?.offline_ready?row:null;currentSession=row?.progress;$('course').textContent=row?row.title+' · '+row.state:'还没有导入课件';$('start').hidden=!row;if(row){$('start').textContent=row.state==='课件需要重新连接'?'重新连接课件':row.state==='已完成'?'再学一次':row.state==='未开始'?'开始学习':'继续学习';$('start').onclick=()=>guard(()=>row.state==='课件需要重新连接'?$('package').click():enter(row,row.state==='已完成'?'replay':row.state==='未开始'?'start':'resume'));}return row;}
+if($('diagnostic'))$('diagnostic').onclick=()=>guard(exportDiagnostic);
+$('catalog').onclick=()=>guard(directory);
+$('import').onclick=()=>$('package').click();$('package').onchange=()=>guard(async()=>{const f=$('package').files[0];if(!f)return;$('import').disabled=true;try{$('status').textContent='正在检查并安装，请稍等。';await installer.install(f);await refresh();await checkReady();}finally{$('import').disabled=false;$('package').value='';}});
+$('backup').onclick=()=>guard(exportState);$('restore').onchange=()=>guard(async()=>{const f=$('restore').files[0];if(f){await restoreProgress(f);await refresh();$('status').textContent='进度已恢复。';}});
+async function askReady(worker){
+ if(!worker)return {ready:false};
+ return new Promise(resolve=>{const c=new MessageChannel(),timeout=setTimeout(()=>{c.port1.close();resolve({ready:false});},5000);c.port1.onmessage=e=>{clearTimeout(timeout);c.port1.close();resolve(e.data||{ready:false});};try{worker.postMessage({type:'CHECK_READY'},[c.port2]);}catch{clearTimeout(timeout);resolve({ready:false});}});
+}
+async function checkReady(reg=registration){
+ const worker=navigator.serviceWorker.controller||reg?.active;
+ const reply=await askReady(worker);
+ ready=reply.ready===true&&reply.version===BUILD;
+ const installed=!!currentInstalled;
+ $('start').disabled=installed&&(navigator.onLine===false&&!ready);
+ if($('restart'))$('restart').disabled=!installed||(navigator.onLine===false&&!ready);
+ if(ready)$('status').textContent='已准备好';
+ else if(navigator.onLine===false)$('status').textContent='离线准备尚未完成，请联网打开一次。';
+ else $('status').textContent='在线可学习，正在准备离线使用…';
+ if(ready)diag('sw_ready',{version:reply.version});
+ return ready;
 }
 async function prepare(){
- $('status').textContent='正在准备离线使用…';$('start').disabled=true;$('restart').disabled=true;await refresh();
+ $('status').textContent='正在准备离线使用…';await library.repair();await refresh();
  if(!globalThis.isSecureContext||!navigator.serviceWorker)throw Error('请从原来的HTTPS网址打开。');
  const v=await fetch('./version.json',{cache:'reload'}).then(r=>r.json());if(v.shell_version!==BUILD)throw Error('版本更新还没完成，请关闭所有英语学习页面后重新打开。');
- const reg=await navigator.serviceWorker.register('./sw.js',{scope:'./'});
- const updateNotice=()=>{if(reg.waiting)$('status').textContent='更新已下载。请关闭英语学习和此网站的Safari页面，再重新打开。';};
- reg.addEventListener('updatefound',()=>{const worker=reg.installing;worker?.addEventListener('statechange',()=>{if(worker.state==='installed')updateNotice();if(worker.state==='redundant')$('status').textContent='准备未完成，请联网后重试。';});});
- navigator.serviceWorker.addEventListener('controllerchange',()=>checkReady().catch(()=>{}));
- await Promise.race([navigator.serviceWorker.ready,new Promise((_,reject)=>setTimeout(()=>reject(Error('准备还未完成，请保持联网，重新打开一次。')),15000))]);
- await checkReady();updateNotice();
+ registration=await navigator.serviceWorker.register('./sw.js',{scope:'./',type:'module',updateViaCache:'none'});
+ const updateNotice=()=>{if(registration.waiting)$('status').textContent='更新已下载。请关闭英语学习和此网站的Safari页面，再重新打开。';};
+ registration.addEventListener('updatefound',()=>{const worker=registration.installing;worker?.addEventListener('statechange',()=>{if(worker.state==='installed'){updateNotice();checkReady(registration).catch(()=>{});}if(worker.state==='redundant')$('status').textContent='准备未完成，请联网后重试。';});});
+ navigator.serviceWorker.addEventListener('controllerchange',()=>checkReady(registration).catch(()=>{}));
+ try{await Promise.race([navigator.serviceWorker.ready,new Promise((_,reject)=>setTimeout(()=>reject(Error('sw_wait_timeout')),15000))]);}catch{}
+ await refresh();await checkReady(registration);updateNotice();
 }
-window.addEventListener('online',()=>guard(prepare));window.addEventListener('offline',()=>{diag('offline');if(!ready)$('status').textContent='请先联网完成离线准备，再开始学习。';});
-window.addEventListener('pageshow',()=>{refresh().then(()=>navigator.serviceWorker?.controller&&checkReady()).catch(()=>{});});
+window.addEventListener('online',()=>guard(prepare));window.addEventListener('offline',()=>{diag('offline');checkReady(registration).catch(()=>{});});
+window.addEventListener('pageshow',()=>{refresh().then(()=>checkReady(registration)).catch(()=>{});});
+if($('build-label'))$('build-label').textContent=BUILD;
 guard(prepare);
