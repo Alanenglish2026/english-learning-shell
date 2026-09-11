@@ -53,3 +53,8 @@ small,footer{color:var(--theme-small)}
 input,textarea,select{background:var(--theme-surface);color:var(--theme-text);border-color:var(--theme-border)}
 .theme-toggle{position:fixed;z-index:20;right:max(10px,env(safe-area-inset-right));top:max(10px,env(safe-area-inset-top));min-height:38px;margin:0;padding:7px 11px;border:1px solid var(--theme-border);border-radius:999px;background:var(--theme-detail);color:var(--theme-text);font-size:13px;box-shadow:0 4px 18px var(--theme-shadow)}
 @media(max-width:600px){.theme-toggle{font-size:12px;padding:6px 9px}}
+
+/* PWA3 iOS safe-area hardening: paint status/home-indicator regions with the active theme. */
+html{min-height:100%;background:var(--theme-bg)}
+body{min-height:100vh;min-height:100dvh;background:var(--theme-bg);background-color:var(--theme-bg)}
+@supports (-webkit-touch-callout:none){html,body{min-height:-webkit-fill-available}}

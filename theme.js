@@ -11,8 +11,20 @@
     if(mode==='system')delete html.dataset.theme;else html.dataset.theme=mode;
     const eff=effective(mode);
     html.style.colorScheme=eff;
-    const meta=document.querySelector('meta[name="theme-color"]');
-    if(meta)meta.setAttribute('content',eff==='dark'?'#0f1720':'#eef2f6');
+    const metas=[...document.querySelectorAll('meta[name="theme-color"]')];
+    const light=metas.find(m=>m.dataset.themeColor==='light'),dark=metas.find(m=>m.dataset.themeColor==='dark');
+    if(light||dark){
+      if(mode==='system'){
+        if(light)light.media='(prefers-color-scheme: light)';
+        if(dark)dark.media='(prefers-color-scheme: dark)';
+      }else{
+        if(light)light.media=eff==='light'?'all':'not all';
+        if(dark)dark.media=eff==='dark'?'all':'not all';
+      }
+    }else if(metas[0]){
+      metas[0].setAttribute('content',eff==='dark'?'#0f1720':'#eef2f6');
+    }
+    html.style.backgroundColor=eff==='dark'?'#0f1720':'#eef2f6';
     const b=document.getElementById('theme-toggle');
     if(b){b.textContent='主题：'+label[mode];b.dataset.mode=mode;b.setAttribute('aria-label','主题设置，当前'+label[mode]);}
     return mode;
