@@ -62,7 +62,7 @@ function recordControl(mode,label){
  const at=epoch,b=action('点一下开始',()=>{});b.classList.add('hold');b.onclick=null;
  const start=async()=>{if(playing||recordBusy)return;recordBusy=true;
   try{await capture.start();if(at!==epoch)return;await persist({recording_active:true});}catch(e){if(at===epoch){capture.cancel();recordBusy=false;}throw e;}};
- const stop=async()=>{try{const p=await capture.stop();pendingBlob={...p,mode,client_record_id:crypto.randomUUID()};await storePending();}catch(e){recordBusy=false;await persist({recording_active:false});throw e;}};
+ const stop=async()=>{try{const p=await capture.stop();capture.closeStream();pendingBlob={...p,mode,client_record_id:crypto.randomUUID()};await storePending();}catch(e){capture.closeStream();recordBusy=false;await persist({recording_active:false});throw e;}};
  capture.onUnexpected=e=>{recordBusy=false;persist({recording_active:false}).then(()=>micFailure(e,mode)).catch(fail);};
  bindHold(b,{start,stop,onError:e=>{if(at===epoch)micFailure(e,mode);},mode:'tap',onAction:()=>diagnostic('CLICK',{click_type:'learning',action:'tap_'+mode})});
 }
