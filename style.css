@@ -5,3 +5,51 @@ body{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-i
 #library-link{text-align:center;font-size:16px}iframe{border:0;width:100%;height:100svh}.primary{background:#173f45}.scene{min-height:0}.picture{width:min(60vw,280px)}.choices img{aspect-ratio:1;object-fit:cover}#app{min-height:calc(100svh - 170px);margin:8px 12px;padding:20px 16px}.actions{position:sticky;bottom:env(safe-area-inset-bottom);background:white;padding:4px 0}.primary{min-width:0;width:100%;min-height:76px}h1{font-size:clamp(23px,5.4vw,30px)}.choice{touch-action:manipulation}button{touch-action:manipulation}.hold{touch-action:none}@media(min-width:700px){#app{max-width:720px;margin:20px auto;padding:36px;min-height:650px}.primary{max-width:400px}.picture{width:320px}}@media(orientation:landscape) and (max-height:500px){.picture{width:150px}#app{min-height:0}.choices img{max-height:160px;width:auto}header,footer{padding:8px}}
 
 [hidden]{display:none!important}iframe{width:100%;height:380px;border:0}
+
+
+/* Release UI theme layer: default follows system; [data-theme] is a manual override. */
+:root{
+  color-scheme:light;
+  --theme-bg:#eef2f6;--theme-surface:#ffffff;--theme-text:#162337;--theme-muted:#526079;
+  --theme-detail:#f1f4f8;--theme-choice:#ffffff;--theme-border:#c2cdd9;--theme-link:#2454ae;
+  --theme-small:#617086;--theme-error:#913924;--theme-shadow:#243b5510;--theme-primary:#173f45;
+  --theme-primary-text:#ffffff;--theme-focus:#0b2b66;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --theme-bg:#0f1720;--theme-surface:#17212b;--theme-text:#e8eef6;--theme-muted:#b7c2d0;
+    --theme-detail:#202c38;--theme-choice:#17212b;--theme-border:#415164;--theme-link:#9ec1ff;
+    --theme-small:#aeb9c7;--theme-error:#ffb4a3;--theme-shadow:#00000035;--theme-primary:#1d565d;
+    --theme-primary-text:#ffffff;--theme-focus:#9ec1ff;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --theme-bg:#0f1720;--theme-surface:#17212b;--theme-text:#e8eef6;--theme-muted:#b7c2d0;
+  --theme-detail:#202c38;--theme-choice:#17212b;--theme-border:#415164;--theme-link:#9ec1ff;
+  --theme-small:#aeb9c7;--theme-error:#ffb4a3;--theme-shadow:#00000035;--theme-primary:#1d565d;
+  --theme-primary-text:#ffffff;--theme-focus:#9ec1ff;
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --theme-bg:#eef2f6;--theme-surface:#ffffff;--theme-text:#162337;--theme-muted:#526079;
+  --theme-detail:#f1f4f8;--theme-choice:#ffffff;--theme-border:#c2cdd9;--theme-link:#2454ae;
+  --theme-small:#617086;--theme-error:#913924;--theme-shadow:#243b5510;--theme-primary:#173f45;
+  --theme-primary-text:#ffffff;--theme-focus:#0b2b66;
+}
+html,body{background:var(--theme-bg);color:var(--theme-text)}
+main{background:var(--theme-surface);color:var(--theme-text);box-shadow:0 18px 60px var(--theme-shadow)}
+.quiet{color:var(--theme-muted)}
+.choices button{background:var(--theme-choice)}
+.tray{border-bottom-color:var(--theme-border)}
+.error,#notice{color:var(--theme-error)}
+details{background:var(--theme-detail);color:var(--theme-text)}
+a{color:var(--theme-link)}
+small,footer{color:var(--theme-small)}
+.actions{background:var(--theme-surface)}
+.primary{background:var(--theme-primary);color:var(--theme-primary-text)}
+.primary:focus-visible,.choice:focus-visible{outline-color:var(--theme-focus)}
+input,textarea,select{background:var(--theme-surface);color:var(--theme-text);border-color:var(--theme-border)}
+.theme-toggle{position:fixed;z-index:20;right:max(10px,env(safe-area-inset-right));top:max(10px,env(safe-area-inset-top));min-height:38px;margin:0;padding:7px 11px;border:1px solid var(--theme-border);border-radius:999px;background:var(--theme-detail);color:var(--theme-text);font-size:13px;box-shadow:0 4px 18px var(--theme-shadow)}
+@media(max-width:600px){.theme-toggle{font-size:12px;padding:6px 9px}}
