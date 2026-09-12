@@ -29,16 +29,37 @@ async function checkReady(reg=registration){
  if(ready)diag('sw_ready',{version:reply.version});
  return ready;
 }
+let prepareSeq=0;
+const timeout=(ms,label)=>new Promise((_,reject)=>setTimeout(()=>reject(Error(label)),ms));
 async function prepare(){
- $('status').textContent='正在准备离线使用…';await library.repair();await refresh();
+ const seq=++prepareSeq,offline=navigator.onLine===false;
+ $('status').textContent=offline?'正在读取本机课程…':'正在准备离线使用…';
+ // Render device-local course/progress first. Maintenance must never blank the home screen.
+ try{await Promise.race([refresh(),timeout(4000,'local_refresh_timeout')]);}catch(e){diag('HOME_LOCAL_REFRESH_DEFERRED',{reason:e?.message||'refresh'}).catch(()=>{});}
+ if(seq!==prepareSeq)return;
  if(!globalThis.isSecureContext||!navigator.serviceWorker)throw Error('请从原来的HTTPS网址打开。');
- const v=await fetch('./version.json',{cache:'reload'}).then(r=>r.json());if(v.shell_version!==BUILD)throw Error('版本更新还没完成，请关闭所有英语学习页面后重新打开。');
- registration=await navigator.serviceWorker.register('./sw.js',{scope:'./',type:'module',updateViaCache:'none'});
- const updateNotice=()=>{if(registration.waiting)$('status').textContent='更新已下载。请关闭英语学习和此网站的Safari页面，再重新打开。';};
+ if(!offline){
+  const v=await fetch('./version.json',{cache:'reload'}).then(r=>r.json());if(v.shell_version!==BUILD)throw Error('版本更新还没完成，请关闭所有英语学习页面后重新打开。');
+  registration=await navigator.serviceWorker.register('./sw.js',{scope:'./',type:'module',updateViaCache:'none'});
+ }else{
+  registration=await navigator.serviceWorker.getRegistration('./');
+  if(!registration){ready=false;$('status').textContent='离线准备尚未完成，请联网打开一次。';return;}
+ }
+ const updateNotice=()=>{if(registration?.waiting)$('status').textContent='更新已下载。请关闭英语学习和此网站的Safari页面，再重新打开。';};
  registration.addEventListener('updatefound',()=>{const worker=registration.installing;worker?.addEventListener('statechange',()=>{if(worker.state==='installed'){updateNotice();checkReady(registration).catch(()=>{});}if(worker.state==='redundant')$('status').textContent='准备未完成，请联网后重试。';});});
- navigator.serviceWorker.addEventListener('controllerchange',()=>checkReady(registration).catch(()=>{}));
- try{await Promise.race([navigator.serviceWorker.ready,new Promise((_,reject)=>setTimeout(()=>reject(Error('sw_wait_timeout')),15000))]);}catch{}
- await refresh();await checkReady(registration);updateNotice();
+ navigator.serviceWorker.addEventListener('controllerchange',()=>checkReady(registration).catch(()=>{}),{once:true});
+ // Existing offline controller/cache should be usable immediately; do not wait on repair/GC.
+ await checkReady(registration);
+ if(!offline){
+  try{await Promise.race([navigator.serviceWorker.ready,timeout(15000,'sw_wait_timeout')]);}catch{}
+  try{await library.repair();await refresh();}catch(e){diag('HOME_REPAIR_DEFERRED',{reason:e?.message||'repair'}).catch(()=>{});}
+  await checkReady(registration);updateNotice();
+ }else{
+  // Recovery/GC is maintenance. Run it in the background so Return-to-Course works offline.
+  Promise.race([library.repair().then(()=>refresh()),timeout(5000,'offline_repair_timeout')])
+   .then(()=>checkReady(registration))
+   .catch(e=>diag('OFFLINE_HOME_REPAIR_DEFERRED',{reason:e?.message||'repair'}).catch(()=>{}));
+ }
 }
 window.addEventListener('online',()=>guard(prepare));window.addEventListener('offline',()=>{diag('offline');checkReady(registration).catch(()=>{});});
 window.addEventListener('pageshow',()=>{refresh().then(()=>checkReady(registration)).catch(()=>{});});
