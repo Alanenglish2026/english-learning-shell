@@ -1,8 +1,9 @@
 // Shared course and temporary-voice playback. No elapsed-time success inference.
+function preferPlaybackSession(){try{const a=globalThis?.navigator?.audioSession;if(a&&'type' in a)a.type='playback';}catch{}}
 export class MediaPlayer {
  constructor(emit=()=>{},make=()=>new Audio()){this.emit=emit;this.make=make;this.active=null;}
  play(src,{id='voice',manual=false}={}){
-  this.stop();const a=this.make();this.audio=a;a.src=src;a.playsInline=true;
+  preferPlaybackSession();this.stop();const a=this.make();this.audio=a;a.src=src;a.playsInline=true;
   this.emit('audio_play_requested',{audio_id:id});
   return new Promise((resolve,reject)=>{
    let accepted=false,ended=false,done=false,last=0,lastProgress=Date.now();

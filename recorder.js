@@ -1,13 +1,15 @@
 // One capture instance; microphone requested only by start() called from a gesture.
 export class Recorder {
  constructor(emit=()=>{},env=globalThis){this.emit=emit;this.env=env;this.state='idle';this.generation=0;this.stream=null;}
- closeStream(){this.stream?.getTracks().forEach(t=>t.stop());this.stream=null;}
+ setAudioSession(type){try{const a=this.env?.navigator?.audioSession;if(a&&'type' in a){a.type=type;this.emit('audio_session_type',{type});return true;}}catch(e){this.emit('audio_session_type_failed',{type,reason:e?.message||String(e)});}return false;}
+ closeStream(){this.stream?.getTracks().forEach(t=>t.stop());this.stream=null;this.setAudioSession('playback');}
  async start(){
   if(this.state!=='idle')throw Error('record_busy');this.state='requesting';const generation=++this.generation,e=this.env;
   try{
    if(!e.isSecureContext)throw Error('insecure_context');
    if(!e.navigator.mediaDevices?.getUserMedia)throw Error('media_devices_unavailable');
    if(!e.MediaRecorder)throw Error('recorder_unsupported');
+   this.setAudioSession('play-and-record');
    this.emit('mic_request');
    // Permission query is diagnostic only; never blocks the gesture request.
    e.navigator.permissions?.query?.({name:'microphone'}).then(p=>this.emit('mic_permission',{state:p.state})).catch(()=>this.emit('mic_permission',{state:'unavailable'}));
