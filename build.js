@@ -1,4 +1,4 @@
-export const BUILD_VERSION='1.3.1-final-freeze-pwa6';
+export const BUILD_VERSION='1.3.1-final-freeze-pwa7';
 export const SCHEMA_VERSION=5;
 export const MIGRATION_VERSION=5;
 export const BUILD=BUILD_VERSION,SCHEMA=SCHEMA_VERSION;

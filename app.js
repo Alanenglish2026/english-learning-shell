@@ -15,7 +15,7 @@ const token='';
 // Keep the selected unit/session URL during refresh.
 let s,manifest,rec,stream,chunks=[],recordStarted,pendingBlob,playing=false,poll,timer,epoch=0,uiBusy=false,recordBusy=false;
 let audio=new Audio();let actions,secondary,body,pendingTransition;
-const player=new MediaPlayer(diagnostic),coursePlayer=new MediaPlayer(diagnostic,()=>audio),capture=new Recorder(diagnostic);
+const player=new MediaPlayer(diagnostic),capture=new Recorder(diagnostic);
 let restoring=false,retryVoiceURL=null;const standalone=()=>navigator.standalone===true||globalThis.matchMedia?.('(display-mode: standalone)').matches===true;
 function diagnostic(type,extra={}){log(type,{...extra,diagnostic:true,observed_at:Date.now()}).catch(()=>{});}
 function cancelTransition(){clearTimeout(timer);pendingTransition=null;}
@@ -37,7 +37,7 @@ async function go(n,autoId){if(playing)return;clearInterval(poll);clearTimeout(t
 async function playRaw(id,manual=false){
  if(playing)throw Error('audio_busy');playing=true;
  try{const src=id==='TEST'?courseURL('assets/TEST.wav'):courseURL('')+manifest.find(x=>x.audio_id===id).file_name;
- const result=await coursePlayer.play(src,{id,manual});await log('AUDIO_PLAY',{audio_id:id,audio_quality:manifest.find(x=>x.audio_id===id)?.status||'device',duration:Number.isFinite(result.duration)?result.duration:null});await persist({last_play:{audio_id:id,at:Date.now()},played:true});}finally{playing=false;}
+ const result=await player.play(src,{id,manual});await log('AUDIO_PLAY',{audio_id:id,audio_quality:manifest.find(x=>x.audio_id===id)?.status||'device',duration:Number.isFinite(result.duration)?result.duration:null});await persist({last_play:{audio_id:id,at:Date.now()},played:true});}finally{playing=false;}
 }
 async function playThen(id,next,manual=false){const at=epoch;try{await playRaw(id,manual);if(at===epoch){diagnostic('transition_requested',{audio_id:id,transition_id:'audio:'+at});await next();diagnostic('transition_completed',{audio_id:id,transition_id:'audio:'+at});}}catch(e){if(at!==epoch)return;await log(e.name==='NotAllowedError'?'AUTOPLAY_BLOCKED':'DEVICE_ISSUE',{device_issue:e.name==='NotAllowedError'?null:e.message,audio_id:id});const b=action('听',()=>{});b.onclick=safe(()=>{const task=playThen(id,next,true);diagnostic('CLICK',{click_type:'learning',action:'听'});return task;});}}
 async function ownPlayback(a,next,manual=false,preparedURL=null){
@@ -141,7 +141,7 @@ async function renderResult(a){if(!a||a.mode!=='S'||!a.result){s=await api('reco
  if(success||last){const finish=async()=>{s=await api('settle',{});diagnostic('evidence_settled');await log('AUTO_ADVANCE',{step:'evidence_settled'});s=await api('end',{});diagnostic('pilot_end');await log('AUTO_ADVANCE',{step:'pilot_ended'});await render()};if(served&&!selfCheck)await playThen('A04',()=>{later(finish,1400)});else later(finish,selfCheck?1200:1800);return;}
  layout(selfCheck?'再说一次':'再说一次你想要的');picture(s.learner_private_state.secret_choice,'cue');await log('AUTO_ADVANCE',{step:'listener_repeat_prepared'});s=await api('repair',{repair_type:'listener_repeat',scope:'S',answer_help:false,support_level:'none',after_attempt:null});await persist({screen:11});recordControl('S','再说一次');second('听一次提示',helpSpeaking);
 }
-async function finish(){capture.cancel();coursePlayer.release();player.release();const lastS=s.attempts.filter(a=>a.mode==='S'&&a.result).at(-1),selfCheck=lastS?.result?.adapter==='self_check';layout(s.final_outcome?.endsWith('_success')?'完成':selfCheck?'单人自测完成':'今天先到这里');text('p',s.final_outcome==='independent_success'?'这次，你自己说出了想要的饮品。':s.final_outcome==='supported_success'?'这次，你借助提示说出了想要的饮品。':selfCheck?'这次只完成了单人自测，不计独立口语证据；以后有真实听者时再验证。':'已保存尝试，下次再试。');action('回到课程',()=>{location.href='./index.html'},'navigation');second('再学一次',async()=>{s=await api('new-session',{reason:'finish_restart',intent:'review'});await render();});}
+async function finish(){capture.cancel();player.release();const lastS=s.attempts.filter(a=>a.mode==='S'&&a.result).at(-1),selfCheck=lastS?.result?.adapter==='self_check';layout(s.final_outcome?.endsWith('_success')?'完成':selfCheck?'单人自测完成':'今天先到这里');text('p',s.final_outcome==='independent_success'?'这次，你自己说出了想要的饮品。':s.final_outcome==='supported_success'?'这次，你借助提示说出了想要的饮品。':selfCheck?'这次只完成了单人自测，不计独立口语证据；以后有真实听者时再验证。':'已保存尝试，下次再试。');action('回到课程',()=>{location.href='./index.html'},'navigation');second('再学一次',async()=>{s=await api('new-session',{reason:'finish_restart',intent:'review'});await render();});}
 async function exportResults(){return exportState();}
 async function render(){
  const n=s.screen;const library=document.querySelector('#library-link');if(library)library.hidden=!(LOCAL&&(n===0||s.ended));
@@ -159,12 +159,12 @@ async function render(){
  if(n===13){const a=s.attempts.filter(a=>a.mode==='S'&&a.result).at(-1);if(!a){s=await api('recover',{});if(s.screen===13)await persist({screen:11});return render();}return renderResult(a);}
  if(n===15&&s.ended&&s.final_evidence_settled&&s.listener_closed)return finish();
 }
- const pauseButton=document.querySelector('#exit');if(pauseButton)pauseButton.onclick=safe(async()=>{if(playing){notice.textContent='听完这段声音后，可以暂停。';return}if(recordBusy){notice.textContent='先点一下结束录音。';return}clearTimeout(timer);clearInterval(poll);epoch++;coursePlayer.stop();player.stop();capture.closeStream();audio.pause();playing=false;await log('PILOT_PAUSE');layout('进度已保存');action('继续学习',async()=>{s=await api('state');await log('PILOT_RESUME');await render()},'navigation');});
- async function recoverAndRender(){if(restoring)return;restoring=true;try{capture.cancel();coursePlayer.release();player.release();playing=false;recordBusy=false;cancelTransition();s=await api('recover',{});await render();}finally{restoring=false;}}
+ const pauseButton=document.querySelector('#exit');if(pauseButton)pauseButton.onclick=safe(async()=>{if(playing){notice.textContent='听完这段声音后，可以暂停。';return}if(recordBusy){notice.textContent='先点一下结束录音。';return}clearTimeout(timer);clearInterval(poll);epoch++;player.stop();capture.closeStream();audio.pause();playing=false;await log('PILOT_PAUSE');layout('进度已保存');action('继续学习',async()=>{s=await api('state');await log('PILOT_RESUME');await render()},'navigation');});
+ async function recoverAndRender(){if(restoring)return;restoring=true;try{capture.cancel();player.release();playing=false;recordBusy=false;cancelTransition();s=await api('recover',{});await render();}finally{restoring=false;}}
  async function boot(){const versionLabel=document.querySelector('#lesson-build-label');if(versionLabel)versionLabel.textContent=BUILD;const v=await globalThis.fetch('./version.json',{cache:'reload'}).then(r=>r.json());if(v.shell_version!==BUILD)throw Error('版本更新还没完成，请关闭所有英语学习页面后重新打开。');manifest=await (await fetch(courseURL('audio_manifest.json'))).json();s=await api('recover',{});diagnostic('app_started',{shell_version:BUILD});diagnostic('pwa_mode',{standalone:standalone()});diagnostic(navigator.onLine===false?'offline':'online');await render();}
  safe(async()=>{try{if(LOCAL&&!globalThis.isSecureContext)throw Error('请使用HTTPS测试入口。');await boot();}catch(e){layout('暂时不能开始');notice.textContent='请回到课程首页，联网完成准备后再试。';action('返回课程',()=>{location.href='./index.html'},'recovery');}})();
  // Media cannot survive a closed document. Live interruption never becomes success.
- function suspend(){clearTimeout(timer);coursePlayer.stop();player.stop();capture.cancel();if(recordBusy){recordBusy=false;persist({recording_active:false}).catch(()=>{});}diagnostic('app_suspended');}
+ function suspend(){clearTimeout(timer);player.stop();capture.cancel();if(recordBusy){recordBusy=false;persist({recording_active:false}).catch(()=>{});}diagnostic('app_suspended');}
  async function resume(){player.check();if(pendingTransition){drainTransition(true);return;}if(!restoring&&!recordBusy&&!playing&&s)await recoverAndRender();}
  document.addEventListener?.('visibilitychange',()=>{if(document.hidden)suspend();else resume().catch(fail);});
  window.addEventListener?.('pagehide',suspend);
