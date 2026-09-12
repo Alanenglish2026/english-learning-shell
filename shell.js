@@ -2,6 +2,10 @@ import {exportDiagnostic} from './diagnostic.js';
 import {storage} from './storage.js';import {UnitInstaller} from './packages.js';import {exportState,restoreProgress} from './transfer.js';import {runtime} from './local_runtime.js';import {library} from './library.js';import {BUILD} from './build.js';
 const $=id=>document.getElementById(id),installer=new UnitInstaller();let ready=false,currentInstalled=null,currentSession=null,registration=null;
 const diag=(type,extra={})=>runtime.request('event',{evidence_type:type,...extra,_core_build:BUILD}).catch(()=>{});
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function clearTransientHome(){if($('directory')){$('directory').hidden=true;$('directory').replaceChildren();}}
+function reopenLocalDB(){try{storage.db?.close?.();}catch{}storage.db=undefined;}
+async function localFirst(){for(let i=0;i<3;i++){const row=await refresh({fast:true,preserve:true});if(row)return row;await sleep(80*(i+1));}return refresh({preserve:true});}
 async function guard(fn){try{await fn()}catch(e){$('status').textContent=e.message;}}
 async function enter(row,intent){const out=await library.openUnit(row.unit_id,intent,{online:navigator.onLine!==false,shellReady:ready});location.href=out.url;}
 function button(label,fn,parent){const b=document.createElement('button');b.textContent=label;b.className='quiet';b.onclick=()=>guard(fn);parent.append(b);return b;}
@@ -34,9 +38,10 @@ let prepareSeq=0;
 const timeout=(ms,label)=>new Promise((_,reject)=>setTimeout(()=>reject(Error(label)),ms));
 async function prepare(){
  const seq=++prepareSeq;
+ clearTransientHome();
  $('status').textContent='正在读取本机课程…';
  // First paint is device-local only. Never let network/SW maintenance erase a known local course.
- try{await Promise.race([refresh({fast:true,preserve:true}),timeout(2500,'local_snapshot_timeout')]);}catch(e){diag('HOME_LOCAL_SNAPSHOT_DEFERRED',{reason:e?.message||'snapshot'}).catch(()=>{});}
+ try{await Promise.race([localFirst(),timeout(2500,'local_snapshot_timeout')]);}catch(e){diag('HOME_LOCAL_SNAPSHOT_DEFERRED',{reason:e?.message||'snapshot'}).catch(()=>{});}
  if(seq!==prepareSeq)return;
  if(!globalThis.isSecureContext||!navigator.serviceWorker)throw Error('请从原来的HTTPS网址打开。');
  registration=await navigator.serviceWorker.getRegistration('./');
@@ -61,6 +66,8 @@ async function prepare(){
 }
 window.addEventListener('online',()=>guard(prepare));
 window.addEventListener('offline',()=>{diag('offline');refresh({fast:true,preserve:true}).then(()=>checkReady(registration)).catch(()=>{});});
-window.addEventListener('pageshow',()=>{refresh({fast:true,preserve:true}).then(()=>checkReady(registration)).then(()=>refresh({preserve:true})).catch(()=>{});});
+window.addEventListener('pageshow',e=>{if(e.persisted){reopenLocalDB();diag('HOME_BFCACHE_REOPEN').catch(()=>{});}guard(prepare);});
+window.addEventListener('popstate',()=>{reopenLocalDB();guard(prepare);});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)guard(prepare);});
 if($('build-label'))$('build-label').textContent=BUILD;
 guard(prepare);
